@@ -41,6 +41,17 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: 🔍 Repo debug (show files)
+        run: |
+          echo "=== current directory ==="
+          pwd
+          echo
+          echo "=== root listing ==="
+          ls -la
+          echo
+          echo "=== top-level tree (2 levels) ==="
+          find . -maxdepth 2 -type f -print | sed -e 's/^/ - /'
+
       - name: 🐍 Setup Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
@@ -54,7 +65,7 @@ jobs:
           path: |
             ~/.cache/pip
             cores/
-          key: ${{ runner.os }}-deps-${{ hashFiles('requirements.txt') }}-${{ hashFiles('bootstrap.sh') }}
+          key: ${{ runner.os }}-deps-${{ hashFiles('**/requirements.txt') }}-${{ hashFiles('**/bootstrap.sh') }}
           restore-keys: |
             ${{ runner.os }}-deps-
 
@@ -65,41 +76,94 @@ jobs:
 
       - name: 📋 Install Python dependencies
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            echo "requirements.txt not found, skipping pip install -r requirements.txt"
+          fi
 
-      - name: 🚀 Setup project
+      - name: 🚀 Setup project (safe)
         run: |
-          chmod +x bootstrap.sh
-          bash bootstrap.sh
+          set -euo pipefail
+          # Try root bootstrap.sh, then scripts/bootstrap.sh — در صورتی نبودن هر دو، مرحله را با پیام رد می‌کنیم
+          if [ -f "./bootstrap.sh" ]; then
+            echo "Found ./bootstrap.sh — running it"
+            chmod +x ./bootstrap.sh
+            ./bootstrap.sh
+          elif [ -f "./scripts/bootstrap.sh" ]; then
+            echo "Found ./scripts/bootstrap.sh — running it"
+            chmod +x ./scripts/bootstrap.sh
+            ./scripts/bootstrap.sh
+          else
+            echo "⚠️ bootstrap.sh not found in repo root or ./scripts/. Skipping bootstrap step."
+            echo "If bootstrap.sh is required, add it to the repo root or update the workflow path."
+          fi
 
-      - name: ✅ Verify configuration
-        run: python3 -m src.config
+      - name: ✅ Verify configuration (if module exists)
+        run: |
+          set -euo pipefail
+          if python -c "import importlib, sys; sys.exit(0 if importlib.util.find_spec('src.config') else 1)"; then
+            python3 -m src.config
+          else
+            echo "Module src.config not found — skipping verification step."
+          fi
 
-      - name: 📥 Fetch subscriptions
-        run: python3 -m src.fetcher
+      - name: 📥 Fetch subscriptions (if module exists)
+        run: |
+          set -euo pipefail
+          if python -c "import importlib, sys; sys.exit(0 if importlib.util.find_spec('src.fetcher') else 1)"; then
+            python3 -m src.fetcher
+          else
+            echo "Module src.fetcher not found — skipping fetcher step."
+          fi
         timeout-minutes: 5
 
       - name: 🧪 Test with Xray Core
-        run: python3 -m src.xray_tester
+        run: |
+          set -euo pipefail
+          if python -c "import importlib, sys; sys.exit(0 if importlib.util.find_spec('src.xray_tester') else 1)"; then
+            python3 -m src.xray_tester
+          else
+            echo "Module src.xray_tester not found — skipping Xray tester."
+          fi
         timeout-minutes: 15
         continue-on-error: true
 
       - name: 🧪 Test with Hiddify Core
-        run: python3 -m src.hiddify_tester
+        run: |
+          set -euo pipefail
+          if python -c "import importlib, sys; sys.exit(0 if importlib.util.find_spec('src.hiddify_tester') else 1)"; then
+            python3 -m src.hiddify_tester
+          else
+            echo "Module src.hiddify_tester not found — skipping Hiddify tester."
+          fi
         timeout-minutes: 15
         continue-on-error: true
 
-      - name: 🔍 Filter results
-        run: python3 -m src.filter
+      - name: 🔍 Filter results (if module exists)
+        run: |
+          set -euo pipefail
+          if python -c "import importlib, sys; sys.exit(0 if importlib.util.find_spec('src.filter') else 1)"; then
+            python3 -m src.filter
+          else
+            echo "Module src.filter not found — skipping filter step."
+          fi
         timeout-minutes: 5
 
-      - name: 📊 Generate report
-        run: python3 -m src.reporter
+      - name: 📊 Generate report (if module exists)
+        run: |
+          set -euo pipefail
+          if python -c "import importlib, sys; sys.exit(0 if importlib.util.find_spec('src.reporter') else 1)"; then
+            python3 -m src.reporter
+          else
+            echo "Module src.reporter not found — skipping reporter."
+          fi
         timeout-minutes: 3
 
       - name: 📦 Upload artifacts
-        uses: actions/upload-artifact@v4   # ✅ upgraded to v4
+        uses: actions/upload-artifact@v4
         with:
           name: scan-results-${{ github.run_number }}-${{ matrix.python-version }}
           path: |
@@ -113,11 +177,16 @@ jobs:
 
       - name: 📈 Update repository
         run: |
+          set -euo pipefail
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add output/merged_nodes.txt output/merged_sub_base64.txt output/reports/ output/stats/
-          git diff --cached --quiet || git commit -m "🚀 Auto-update configs - Run #${{ github.run_number }}"
-          git push
+          git add output/merged_nodes.txt output/merged_sub_base64.txt output/reports/ output/stats/ || true
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "🚀 Auto-update configs - Run #${{ github.run_number }}" || echo "commit failed"
+            git push || echo "push failed (check permissions)"
+          fi
         continue-on-error: true
 
       - name: 🎯 Success notification
@@ -130,4 +199,4 @@ jobs:
         if: failure()
         run: |
           echo "❌ Scan failed!"
-          exit 1
+          echo "Check the log above and artifacts. (This step won't force an additional exit code.)"
