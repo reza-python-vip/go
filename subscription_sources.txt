@@ -1,0 +1,4 @@
+# This file contains the list of subscription URLs, one per line.
+# Lines starting with # are treated as comments and ignored.
+
+https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/sub/sub_merge.txt

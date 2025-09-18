@@ -1,0 +1,61 @@
+name: Run Proxy Tester and Commit Results
+
+on:
+  push:
+    branches:
+      - main # Runs when code is pushed to main
+  workflow_dispatch: # Allows manual triggering
+  schedule:
+    - cron: '0 */6 * * *' # Runs every 6 hours
+
+permissions:
+  contents: write # Grants write permissions to the workflow to commit and push changes
+
+jobs:
+  run-and-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11' # Use a modern Python version
+          cache: 'pip'
+
+      - name: Install Python Dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Bootstrap Cores (Download Xray/Hiddify)
+        run: |
+          bash ./bootstrap.sh
+        # This script should handle the download and setup of xray/hiddify binaries.
+
+      - name: Run the Main Application
+        run: |
+          python -m src.main
+        # This executes the main logic to fetch, test, and generate subscription files.
+
+      - name: Configure Git
+        run: |
+          git config --global user.name 'GitHub Actions Bot'
+          git config --global user.email 'github-actions-bot@github.com'
+
+      - name: Commit and Push Changes
+        run: |
+          # Add all generated subscription files
+          git add -A subscription/
+          
+          # Check if there are any changes to commit
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            # Commit the changes with a dynamic message
+            git commit -m "Update subscriptions on $(date -u)"
+            
+            # Push the changes back to the repository
+            git push origin main
+            echo "Successfully pushed updated subscription files."
+          fi

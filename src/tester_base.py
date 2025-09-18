@@ -1,49 +1,51 @@
-"""Base tester helpers for wrapping external core binaries.
+"""Defines the abstract base class for all node testers.
 
-Helpers here are intentionally small and mostly used by tester modules.
+This module provides the `NodeTester` ABC, which establishes a common interface
+for any class that aims to test the network performance of a proxy configuration.
 """
 
 from __future__ import annotations
 
-import asyncio
-import subprocess
-import json
-from typing import Dict, Any
+from abc import ABC, abstractmethod
+from typing import Optional
 
-from .network_metrics import Metrics, measure_throughput
+from .network_metrics import Metrics
 
 
-class TesterBase:
-    def __init__(self, core_binary: str) -> None:
-        self.core = core_binary
+class NodeTester(ABC):
+    """Abstract Base Class for a proxy node tester.
 
-    async def _start_core(self, config_json: Dict[str, Any]) -> subprocess.Popen:
-        # Write config to temp file and start core
-        import tempfile
-        import os
+    All concrete tester implementations (e.g., for Xray, Hiddify) should inherit
+    from this class and implement its abstract methods.
+    """
 
-        fd, path = tempfile.mkstemp(prefix="core_config_", suffix=".json")
-        with os.fdopen(fd, "w") as f:
-            json.dump(config_json, f)
+    @abstractmethod
+    async def test_node(self, config_line: str) -> Optional[Metrics]:
+        """Tests a single proxy configuration and returns its network metrics.
 
-        proc = subprocess.Popen(
-            [self.core, "-c", path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
-        await asyncio.sleep(0.2)
-        return proc
+        Args:
+            config_line: The configuration string (e.g., vmess://, ss://) to be tested.
 
-    async def _stop_core(self, proc: subprocess.Popen) -> None:
-        proc.terminate()
-        try:
-            proc.wait(timeout=2)
-        except Exception:
-            proc.kill()
+        Returns:
+            A `Metrics` object containing the performance data if the test is successful,
+            or `None` if the test fails, is inconclusive, or the node is invalid.
+        """
+        pass
 
-    async def test_config(self, config: Dict[str, Any]) -> Metrics:
-        # Start core and run a small probe
-        proc = await self._start_core(config)
-        try:
-            m = await measure_throughput("http://127.0.0.1:1080")
-        finally:
-            await self._stop_core(proc)
-        return m
+    @abstractmethod
+    async def __aenter__(self):
+        """Asynchronous context manager entry.
+
+        This method should handle any setup required by the tester, such as verifying
+        the existence of a binary or initializing resources.
+        It should return `self`.
+        """
+        pass
+
+    @abstractmethod
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Asynchronous context manager exit.
+
+        This method should handle the cleanup of any resources used by the tester.
+        """
+        pass

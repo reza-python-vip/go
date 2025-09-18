@@ -1,43 +1,72 @@
-"""Utility helpers used across the project.
+"""General utility functions used across the project.
 
-Small, well-scoped helpers: session creation, timestamp formatting,
-file writing and a simple TCP probe.
+This module contains helper functions for file I/O, data encoding/decoding,
+and other common tasks that are not specific to any single component.
 """
 
 from __future__ import annotations
 
-import asyncio
+import base64
+import logging
 import os
-import time
-from pathlib import Path
 from typing import Optional
 
-import aiohttp
-from loguru import logger
+# Get a logger for this module
+logger = logging.getLogger(__name__)
 
 
-def make_session(timeout: int = 10, proxy: Optional[str] = None) -> aiohttp.ClientSession:
-    timeout_obj = aiohttp.ClientTimeout(total=timeout)
-    connector = aiohttp.TCPConnector(ssl=False, limit=100)
-    return aiohttp.ClientSession(timeout=timeout_obj, connector=connector)
+def safe_write(path: str, content: str) -> None:
+    """Writes content to a file, creating parent directories if they don't exist.
 
+    This function prevents errors that occur when trying to write to a file in a
+    non-existent directory.
 
-def now_iso() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-
-
-def safe_write(path: str, data: str, mode: str = "w") -> None:
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(data, encoding="utf-8")
-
-
-async def probe_tcp(host: str, port: int, timeout: int = 5) -> bool:
+    Args:
+        path: The full path to the file to be written.
+        content: The string content to write to the file.
+    """
     try:
-        fut = asyncio.open_connection(host, port)
-        reader, writer = await asyncio.wait_for(fut, timeout=timeout)
-        writer.close()
-        await writer.wait_closed()
-        return True
-    except Exception:
-        return False
+        # Ensure the directory exists
+        dir_name = os.path.dirname(path)
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
+        
+        # Write the file
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        logger.debug(f"Successfully wrote to file: {path}")
+
+    except IOError as e:
+        logger.error(f"Could not write to file {path}: {e}")
+    except Exception as e:
+        logger.critical(f"An unexpected error occurred in safe_write for path {path}: {e}")
+
+
+def decode_base64_text(encoded_text: str) -> Optional[str]:
+    """Decodes a base64 encoded string, gracefully handling common errors.
+
+    This function attempts to decode a base64 string and handles issues like
+    incorrect padding or invalid characters.
+
+    Args:
+        encoded_text: The base64 encoded string.
+
+    Returns:
+        The decoded string if successful, otherwise None.
+    """
+    try:
+        # Add padding if it's missing. Base64 strings must be a multiple of 4.
+        padding = len(encoded_text) % 4
+        if padding != 0:
+            encoded_text += '=' * (4 - padding)
+        
+        # Decode the string
+        decoded_bytes = base64.b64decode(encoded_text)
+        return decoded_bytes.decode('utf-8')
+    
+    except (ValueError, TypeError, base64.binascii.Error) as e:
+        logger.debug(f"Failed to decode base64 string: {e}")
+        return None
+    except UnicodeDecodeError as e:
+        logger.warning(f"Could not decode bytes to UTF-8 after base64 decoding: {e}")
+        return None
