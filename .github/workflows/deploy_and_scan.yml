@@ -1,0 +1,63 @@
+name: Deploy Firebase & Run Scan
+
+on:
+  workflow_dispatch:
+  # optional scheduled
+  schedule:
+    - cron: '0 2 * * *'
+
+jobs:
+  deploy-and-scan:
+    runs-on: ubuntu-latest
+    # Job env can reference secrets safely; keep values empty if secrets not present.
+    env:
+      REPORT_URL: ${{ secrets.SCAN_REPORT_URL }}
+      REPORT_API_KEY: ${{ secrets.SCAN_REPORT_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y curl unzip nodejs npm
+
+      - name: Install Python deps
+        run: pip install -r requirements.txt
+
+      - name: Authenticate to GCP (optional)
+        if: ${{ secrets.GCP_SA_KEY != '' }}
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+        run: |
+          echo "$GCP_SA_KEY" > /tmp/gcp_key.json
+          gcloud auth activate-service-account --key-file=/tmp/gcp_key.json
+          gcloud config set project "$GCP_PROJECT_ID"
+
+      - name: Deploy Firebase functions + hosting (optional)
+        if: ${{ secrets.FIREBASE_TOKEN != '' }}
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+        run: |
+          # Install functions deps and deploy (best-effort)
+          cd firebase/functions && npm install || true
+          firebase deploy --only functions,hosting --token "$FIREBASE_TOKEN" || true
+
+      - name: Run bootstrap
+        run: bash ./bootstrap.sh
+
+      - name: Run smoke scan
+        run: |
+          python -m run_smoke_scan
+        env:
+          REPORT_URL: ${{ secrets.SCAN_REPORT_URL }}
+          REPORT_API_KEY: ${{ secrets.SCAN_REPORT_API_KEY }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: scanner-output
+          path: output/**

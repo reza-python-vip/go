@@ -1,0 +1,14 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Allow reads to public files
+    match /public/{allPaths=**} {
+      allow read: if true;
+    }
+
+    // Restrict upload to authenticated service accounts or project owners
+    match /uploads/{allPaths=**} {
+      allow write: if request.auth != null && request.auth.token.admin == true;
+    }
+  }
+}

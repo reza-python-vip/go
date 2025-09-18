@@ -1,0 +1,10 @@
+{
+  "name": "proxy-scanner-fn",
+  "version": "0.0.1",
+  "private": true,
+  "engines": { "node": "18" },
+  "dependencies": {
+    "firebase-admin": "^11.0.0",
+    "firebase-functions": "^4.0.0"
+  }
+}
