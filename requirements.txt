@@ -1,37 +1,7 @@
-# Core dependencies
-aiohttp==3.9.5
-aiohttp-socks==0.8.4
-aiofiles==23.2.1
-uvloop==0.19.0
-orjson==3.10.3
-loguru==0.7.2
-
-# Advanced dependencies
-psutil==5.9.8
-python-multipart==0.0.9
-asyncio-throttle==1.0.2
-backoff==2.2.1
-cachetools==5.3.3
-python-dotenv==1.0.1
-
-# Protocol support
-grpcio==1.64.0
-grpcio-tools==1.64.0
-aioquic==1.2.0
-h2==4.1.0
-h11==0.14.0
-
-# Optional optimizations
-uvicorn==0.29.0
-fastapi==0.111.0
-prometheus-client==0.20.0
-requests==2.31.0
-
-# Development
-pytest==8.2.0
-pytest-asyncio==0.23.6
-pytest-cov==5.0.0
-black==24.4.2
-isort==5.13.2
-mypy==1.9.0
-ruff==0.4.2
+requests
+colorama
+maxminddb-geolite2
+flake8
+pytest
+pip-audit
+bandit
