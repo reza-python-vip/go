@@ -6,8 +6,8 @@ on:
       - main
   workflow_dispatch:
   schedule:
-    - cron: '0 */6 * * *' # هر ۶ ساعت
-    - cron: '0 2 * * *'   # هر روز ساعت ۲ شب
+    - cron: '0 */6 * * *'
+    - cron: '0 2 * * *'
 
 permissions:
   contents: write
