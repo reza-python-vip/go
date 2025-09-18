@@ -3,7 +3,7 @@ name: V2Ray Scanner Ultimate - Professional
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */1 * * *"  # Every hour
+    - cron: "0 */1 * * *"   # Run every hour
   push:
     branches: [main, master]
   pull_request:
@@ -34,99 +34,100 @@ jobs:
     strategy:
       matrix:
         python-version: ['3.11']
-    
+
     steps:
-    - name: 📥 Checkout code
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    - name: 🐍 Setup Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.python-version }}
-        cache: 'pip'
-        cache-dependency-path: requirements.txt
+      - name: 🐍 Setup Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
 
-    - name: 📦 Cache dependencies
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.cache/pip
-          cores/
-        key: ${{ runner.os }}-deps-${{ hashFiles('requirements.txt') }}-${{ hashFiles('bootstrap.sh') }}
-        restore-keys: |
-          ${{ runner.os }}-deps-
+      - name: 📦 Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            cores/
+          key: ${{ runner.os }}-deps-${{ hashFiles('requirements.txt') }}-${{ hashFiles('bootstrap.sh') }}
+          restore-keys: |
+            ${{ runner.os }}-deps-
 
-    - name: 🔧 Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y wget curl unzip ca-certificates bc
+      - name: 🔧 Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget curl unzip ca-certificates bc
 
-    - name: 📋 Install Python dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
+      - name: 📋 Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-    - name: 🚀 Setup project
-      run: |
-        chmod +x bootstrap.sh
-        bash bootstrap.sh
+      - name: 🚀 Setup project
+        run: |
+          chmod +x bootstrap.sh
+          bash bootstrap.sh
 
-    - name: ✅ Verify configuration
-      run: python3 -m src.config
+      - name: ✅ Verify configuration
+        run: python3 -m src.config
 
-    - name: 📥 Fetch subscriptions
-      run: python3 -m src.fetcher
-      timeout-minutes: 5
+      - name: 📥 Fetch subscriptions
+        run: python3 -m src.fetcher
+        timeout-minutes: 5
 
-    - name: 🧪 Test with Xray Core
-      run: python3 -m src.xray_tester
-      timeout-minutes: 15
-      continue-on-error: true
+      - name: 🧪 Test with Xray Core
+        run: python3 -m src.xray_tester
+        timeout-minutes: 15
+        continue-on-error: true
 
-    - name: 🧪 Test with Hiddify Core
-      run: python3 -m src.hiddify_tester
-      timeout-minutes: 15
-      continue-on-error: true
+      - name: 🧪 Test with Hiddify Core
+        run: python3 -m src.hiddify_tester
+        timeout-minutes: 15
+        continue-on-error: true
 
-    - name: 🔍 Filter results
-      run: python3 -m src.filter
-      timeout-minutes: 5
+      - name: 🔍 Filter results
+        run: python3 -m src.filter
+        timeout-minutes: 5
 
-    - name: 📊 Generate report
-      run: python3 -m src.reporter
-      timeout-minutes: 3
+      - name: 📊 Generate report
+        run: python3 -m src.reporter
+        timeout-minutes: 3
 
-    - name: 📦 Upload artifacts
-      uses: actions/upload-artifact@v3
-      with:
-        name: scan-results-${{ github.run_number }}
-        path: |
-          output/merged_nodes.txt
-          output/merged_sub_base64.txt
-          output/reports/
-          output/stats/
-          logs/
-        retention-days: 7
+      - name: 📦 Upload artifacts
+        uses: actions/upload-artifact@v4   # ✅ upgraded to v4
+        with:
+          name: scan-results-${{ github.run_number }}-${{ matrix.python-version }}
+          path: |
+            output/merged_nodes.txt
+            output/merged_sub_base64.txt
+            output/reports/
+            output/stats/
+            logs/
+          retention-days: 7
+          if-no-files-found: warn
 
-    - name: 📈 Update repository
-      run: |
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
-        git add output/merged_nodes.txt output/merged_sub_base64.txt output/reports/ output/stats/
-        git diff --cached --quiet || git commit -m "🚀 Auto-update configs - Run #${{ github.run_number }}"
-        git push
-      continue-on-error: true
+      - name: 📈 Update repository
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add output/merged_nodes.txt output/merged_sub_base64.txt output/reports/ output/stats/
+          git diff --cached --quiet || git commit -m "🚀 Auto-update configs - Run #${{ github.run_number }}"
+          git push
+        continue-on-error: true
 
-    - name: 🎯 Success notification
-      if: success()
-      run: |
-        echo "✅ Scan completed successfully!"
-        echo "📊 Results saved to artifacts"
+      - name: 🎯 Success notification
+        if: success()
+        run: |
+          echo "✅ Scan completed successfully!"
+          echo "📊 Results saved to artifacts"
 
-    - name: ⚠️ Failure notification
-      if: failure()
-      run: |
-        echo "❌ Scan failed!"
-        exit 1
+      - name: ⚠️ Failure notification
+        if: failure()
+        run: |
+          echo "❌ Scan failed!"
+          exit 1
