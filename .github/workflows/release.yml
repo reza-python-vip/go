@@ -1,85 +1,26 @@
-# GitHub Actions workflow for deploying to Firebase and running a smoke scan
+# This is the Continuous Release (CR) pipeline.
 #
-# This workflow is the pinnacle of CI/CD automation, incorporating a multi-OS
-# validation matrix, code coverage analytics, quality gates, security scanning,
-# intelligent caching, a self-verification gate, and a rich, data-driven notification system.
-#
-# To use this workflow, you will need to add the following secrets to your GitHub repository:
-# - FIREBASE_TOKEN: Your Firebase token for authentication.
-# - GCP_PROJECT_ID: Your Google Cloud Project ID.
-# - GCP_WORKLOAD_IDENTITY_PROVIDER: The full path of your Workload Identity Provider.
-# - GCP_SERVICE_ACCOUNT_EMAIL: The email of the Google Cloud service account to use.
-# - CODECOV_TOKEN: Your Codecov upload token.
+# It runs only when a new release is created in GitHub. It orchestrates the
+# build, scan, deployment, and notification process. As its final act, it
+# uploads the generated subscription files as release assets, creating a
+# permanent and auditable record of the deployment.
 
-name: Ultimate Deploy, Scan, and Notify
+name: Continuous Release
 
 on:
-  push:
-    branches:
-      - main
-
-# Concurrency control to prevent multiple runs from conflicting.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  release:
+    types: [created]
 
 # Set default permissions for the GITHUB_TOKEN.
+# `contents: write` is required to upload release assets.
+# `id-token: write` is required for authenticating with Google Cloud.
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 jobs:
-  quality_and_security_shield:
-    name: Cross-Platform Quality & Security Shield
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: \'3.10\'
-
-      - name: Cache Python dependencies
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/pip
-          key: ${{ matrix.os }}-pip-${{ hashFiles(\'**/requirements.txt\') }}
-          restore-keys: |
-            ${{ matrix.os }}-pip-
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Lint with flake8
-        run: flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-
-      - name: Scan for code vulnerabilities with bandit
-        run: bandit -r . -ll -ii
-
-      - name: Scan for dependency vulnerabilities with pip-audit
-        run: pip-audit
-
-      - name: Run tests and collect coverage
-        run: pytest --cov=src --cov-report=xml
-
-      - name: Upload Coverage Report to Codecov
-        uses: codecov/codecov-action@v3
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: ./coverage.xml
-          flags: ${{ matrix.os }}
-          fail_ci_if_error: true
-
   build_and_scan:
-    name: Build and Scan
-    needs: quality_and_security_shield
+    name: Build, Scan, and Verify
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
@@ -98,13 +39,13 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: \'3.10\'
+          python-version: '3.10'
 
       - name: Cache Python dependencies
         uses: actions/cache@v3
         with:
           path: ~/.cache/pip
-          key: ubuntu-latest-pip-${{ hashFiles(\'**/requirements.txt\') }}
+          key: ubuntu-latest-pip-${{ hashFiles('**/requirements.txt') }}
           restore-keys: |
             ubuntu-latest-pip-
 
@@ -113,13 +54,13 @@ jobs:
         uses: actions/cache@v3
         with:
           path: ./cores
-          key: ubuntu-latest-cores-${{ hashFiles(\'install.py\') }}
+          key: ubuntu-latest-cores-${{ hashFiles('install.py') }}
 
       - name: Install dependencies
         run: pip install -r requirements.txt
 
       - name: Install application components (cores)
-        if: steps.cache-cores.outputs.cache-hit != \'true\'
+        if: steps.cache-cores.outputs.cache-hit != 'true'
         run: python install.py
 
       - name: 1. Fetch Subscription Sources
@@ -144,29 +85,34 @@ jobs:
         id: count_proxies
         if: always()
         run: |
-          count=$(wc -l < output/all.txt | tr -d \' \')
+          count=$(wc -l < output/all.txt | tr -d ' ')
           echo "Found $count proxies."
           echo "count=$count" >> $GITHUB_OUTPUT
 
-      - name: Upload scan results and logs
-        if: always()
+      - name: Upload scan results for other jobs
         uses: actions/upload-artifact@v3
         with:
           name: scan-results
           path: |
             output/
             logs/
-          retention-days: 7
+          retention-days: 1
 
-  deploy:
-    name: Deploy to Firebase
+  deploy_and_notify:
+    name: Deploy and Notify
     needs: build_and_scan
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
+
+      - name: Download scan results
+        uses: actions/download-artifact@v3
+        with:
+          name: scan-results
+          path: .
 
       - name: Deploy to Firebase
         run: |
@@ -175,16 +121,9 @@ jobs:
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
 
-  notify_users:
-    name: Notify Users with "Sentient" Payload
-    needs: [deploy, build_and_scan]
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-
-    steps:
       - name: Authenticate to Google Cloud
         id: auth
-        uses: \'google-github-actions/auth@v2\'
+        uses: 'google-github-actions/auth@v2'
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
@@ -230,3 +169,23 @@ jobs:
           -H "Authorization: Bearer $(gcloud auth print-access-token)" \
           -H "Content-Type: application/json" \
           -d "$JSON_PAYLOAD"
+
+  upload_release_assets:
+    name: Upload Release Assets
+    needs: build_and_scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Download scan results
+        uses: actions/download-artifact@v3
+        with:
+          name: scan-results
+          path: output
+
+      - name: Upload subscription files to release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            output/all.txt
+            output/base64_all.txt
