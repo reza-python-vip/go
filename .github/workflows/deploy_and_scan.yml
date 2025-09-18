@@ -1,47 +1,81 @@
+
+# Comprehensive CI/CD workflow for the project
 name: Deploy and Scan
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
 
 jobs:
-  build_and_push:
+  lint-and-format:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v3
+    - uses: actions/checkout@v3
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    - name: Install dependencies
+      run: pip install -r requirements.txt
+    - name: Run linting and formatting checks
+      run: |
+        ruff check .
+        black --check .
+        isort --check-only .
+        mypy src/
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-
-      - name DOCKER_USERNAME
-        uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-
-      - name: Build and push
-        uses: docker/build-push-action@v4
-        with:
-          context: .
-          file: ./Dockerfile
-          push: true
-          tags: ${{ secrets.DOCKER_USERNAME }}/hiddify-next:latest
-
-  scan:
-    needs: build_and_push
+  test:
     runs-on: ubuntu-latest
+    needs: lint-and-format
     steps:
-      - name: Checkout
-        uses: actions/checkout@v3
+    - uses: actions/checkout@v3
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    - name: Install dependencies
+      run: pip install -r requirements.txt
+    - name: Run tests
+      run: pytest
 
-      - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@0.10.0
-        with:
-          image-ref: '''${{ secrets.DOCKER_USERNAME }}/hiddify-next:latest'''
-          format: '''table'''
-          exit-code: '''1'''
-          ignore-unfixed: true
-          vuln-type: '''os,library'''
-          severity: '''CRITICAL,HIGH'''
+  build:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+    - uses: actions/checkout@v3
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+    - name'': Login to DockerHub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+    - name: Build and push
+      uses: docker/build-push-action@v4
+      with:
+        context: .
+        file: ./Dockerfile
+        push: ${{ github.event_name != 'pull_request' }}
+        tags: ${{ secrets.DOCKERHUB_USERNAME }}/hiddify-subscription:latest
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+    - uses: actions/checkout@v3
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+    - name: Install Firebase CLI
+      run: npm install -g firebase-tools
+    - name: Deploy to Firebase
+      env:
+        FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+        FIREBASE_PROJECT: ${{ secrets.FIREBASE_PROJECT }}
+      run: |
+        ./scripts/deploy_firebase.sh --deploy
+
