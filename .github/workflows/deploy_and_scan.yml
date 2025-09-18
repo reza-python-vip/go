@@ -1,18 +1,58 @@
-name: Deploy Firebase & Run Scan
+name: Proxy + Firebase CI
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
-  # optional scheduled
   schedule:
-    - cron: '0 2 * * *'
+    - cron: '0 */6 * * *' # هر ۶ ساعت
+    - cron: '0 2 * * *'   # هر روز ساعت ۲ شب
+
+permissions:
+  contents: write
 
 jobs:
+  run-and-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Python Dependencies
+        run: pip install -r requirements.txt
+
+      - name: Bootstrap Cores (Download Xray/Hiddify)
+        run: bash ./bootstrap.sh
+
+      - name: Run the Main Application
+        run: python -m src.main
+
+      - name: Configure Git
+        run: |
+          git config --global user.name 'GitHub Actions Bot'
+          git config --global user.email 'github-actions-bot@github.com'
+
+      - name: Commit and Push Changes
+        run: |
+          git add -A subscription/
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Update subscriptions on $(date -u)"
+            git push origin main
+          fi
+
   deploy-and-scan:
     runs-on: ubuntu-latest
-    # Job env can reference secrets safely; keep values empty if secrets not present.
     env:
       REPORT_URL: ${{ secrets.SCAN_REPORT_URL }}
-      # REPORT_API_KEY: ${{ secrets.SCAN_REPORT_API_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -42,7 +82,6 @@ jobs:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
         if: ${{ env.FIREBASE_TOKEN != '' }}
         run: |
-          # Install functions deps and deploy (best-effort)
           cd firebase/functions && npm install || true
           firebase deploy --only functions,hosting --token "$FIREBASE_TOKEN" || true
 
@@ -50,8 +89,7 @@ jobs:
         run: bash ./bootstrap.sh
 
       - name: Run smoke scan
-        run: |
-          python -m run_smoke_scan
+        run: python -m run_smoke_scan
         env:
           REPORT_URL: ${{ secrets.SCAN_REPORT_URL || 'https://default-report-url.example.com' }}
           REPORT_API_KEY: ${{ secrets.SCAN_REPORT_API_KEY != '' && secrets.SCAN_REPORT_API_KEY || 'default-api-key' }}
