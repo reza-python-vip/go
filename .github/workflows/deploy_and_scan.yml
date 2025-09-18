@@ -78,11 +78,13 @@ jobs:
         run: |
           sudo apt-get update -y
           sudo apt-get install -y git curl jq build-essential
+
       - name: Install Python dev tools (if Python sources exist)
         run: |
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           pip install --upgrade ruff mypy pytest pytest-asyncio pip-audit bandit pre-commit || true
+
       - name: Install golangci-lint (if Go sources exist)
         run: |
           if find . -name '*.go' | grep -q .; then
@@ -91,6 +93,7 @@ jobs:
           else
             echo "no go files detected, skipping golangci-lint install"
           fi
+
   lint:
     name: Lint (Python + Go)
     runs-on: ubuntu-latest
@@ -114,6 +117,7 @@ jobs:
           else
             echo "ruff not present or no python files found, skipping"
           fi
+
       - name: Run mypy (optional static typing)
         run: |
           if command -v mypy >/dev/null 2>&1 && (ls **/*.py >/dev/null 2>&1 || ls *.py >/dev/null 2>&1); then
@@ -121,6 +125,7 @@ jobs:
           else
             echo "mypy not present or no python files found, skipping"
           fi
+
       - name: Run golangci-lint (Go)
         run: |
           if command -v golangci-lint >/dev/null 2>&1 && find . -name '*.go' | grep -q .; then
@@ -128,6 +133,7 @@ jobs:
           else
             echo "golangci-lint not present or no go files found, skipping"
           fi
+
   unit-tests:
     name: Unit & Integration tests (Python + Go)
     runs-on: ubuntu-latest
@@ -148,6 +154,7 @@ jobs:
             echo "Go matrix: ensuring module cache"
             go env -w GO111MODULE=on || true
           fi
+
       - name: Run pytest (Python)
         if: matrix.language == 'python'
         run: |
@@ -157,6 +164,7 @@ jobs:
           else
             echo "no python tests detected, skipping pytest"
           fi
+
       - name: Run go test (Go)
         if: matrix.language == 'go'
         run: |
@@ -165,6 +173,7 @@ jobs:
           else
             echo "no go tests detected, skipping go test"
           fi
+
       - name: Upload test reports (JUnit)
         if: matrix.language == 'python'
         uses: actions/upload-artifact@v4
@@ -194,6 +203,7 @@ jobs:
           else
             echo "no requirements.txt found, skipping pip-audit"
           fi
+
       - name: Bandit security scan (Python)
         run: |
           if ls **/*.py >/dev/null 2>&1 || ls *.py >/dev/null 2>&1; then
@@ -201,6 +211,7 @@ jobs:
           else
             echo "no python files found, skipping bandit"
           fi
+
       - name: gosec (Go security)
         run: |
           if find . -name '*.go' | grep -q .; then
@@ -210,6 +221,7 @@ jobs:
           else
             echo "no go files found, skipping gosec"
           fi
+
   build:
     name: Build & Package
     runs-on: ubuntu-latest
@@ -235,6 +247,7 @@ jobs:
           else
             echo "no go files to build"
           fi
+
       - name: Build Python wheel
         run: |
           if [ -f pyproject.toml ] || [ -f setup.py ]; then
@@ -243,6 +256,7 @@ jobs:
           else
             echo "no python packaging metadata found, skipping wheel build"
           fi
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -250,6 +264,7 @@ jobs:
           path: |
             build/**
             dist/**
+
   container-scan:
     name: Docker Build & Trivy Scan (if Dockerfile exists)
     runs-on: ubuntu-latest
@@ -262,6 +277,7 @@ jobs:
         id: dockerfile-check
         run: |
           if [ -f Dockerfile ]; then echo "true"; else echo "false"; fi
+
       - name: Build Docker image (no push)
         if: steps.dockerfile-check.outputs == '' || steps.dockerfile-check.outputs == 'true'
         uses: docker/build-push-action@v4
@@ -292,11 +308,10 @@ jobs:
             build/**
             dist/**
             .github/workflows/**
+
 # End of workflow
 # Notes for maintainers:
 # - Cron schedules are in UTC. If you need a different timezone, convert to UTC or use calendar-based triggers.
 # - Add repository secrets when you want to enable publishing (DOCKERHUB_TOKEN, GHCR_PAT, FIREBASE_TOKEN, etc.)
 # - The workflow auto-detects Python and Go sources and skips irrelevant steps to avoid noisy failures.
 # - For very large repositories, tune caching keys and split jobs further to optimize runtime and parallelism.
-"
- https://github.com/ail-python/go/actions/runs/17841880642/workflow#:~:text=%23%20CI%20%E2%80%94%20Super,runtime%20and%20parallelism.
