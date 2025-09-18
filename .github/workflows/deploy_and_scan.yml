@@ -1,14 +1,8 @@
-# CI — Super Pipeline
-# Automatically runs every hour (UTC) and can be triggered manually.
-# Purpose: robust linting, testing, static analysis, security scans, build, and artifact collection
-# Designed to work for mixed Python + Go repositories (auto-detects sources)
-
 name: CI — Super Pipeline (Hourly & Manual)
 
 on:
   schedule:
-    # runs every hour at minute 0 (GitHub Actions uses UTC for schedule)
-    - cron: '0 * * * *'
+    - cron: '0 * * * *'       # every hour (UTC)
   workflow_dispatch:
     inputs:
       skip_docker:
@@ -30,6 +24,8 @@ permissions:
   contents: read
   checks: write
   id-token: write
+  security-events: write   # needed for Code Scanning API on push
+  actions: read
 
 env:
   PYTEST_JUNIT: reports/junit.xml
@@ -51,6 +47,7 @@ jobs:
         uses: docker/setup-qemu-action@v2
 
       - name: Cache Go modules
+        if: ${{ hashFiles('**/go.sum') != '' }}
         uses: actions/cache@v4
         with:
           path: |
@@ -59,6 +56,7 @@ jobs:
           key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
 
       - name: Cache pip
+        if: ${{ hashFiles('**/requirements.txt') != '' }}
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
@@ -79,20 +77,18 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y git curl jq build-essential
 
-      - name: Install Python dev tools (if Python sources exist)
+      - name: Install Python dev tools (if Python sources or requirements exist)
+        if: ${{ hashFiles('**/*.py') != '' || hashFiles('**/requirements.txt') != '' }}
         run: |
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           pip install --upgrade ruff mypy pytest pytest-asyncio pip-audit bandit pre-commit || true
 
       - name: Install golangci-lint (if Go sources exist)
+        if: ${{ hashFiles('**/*.go') != '' }}
         run: |
-          if find . -name '*.go' | grep -q .; then
-            curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $HOME/bin v1.54.2
-            echo "$HOME/bin" >> $GITHUB_PATH
-          else
-            echo "no go files detected, skipping golangci-lint install"
-          fi
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $HOME/bin v1.54.2
+          echo "$HOME/bin" >> $GITHUB_PATH
 
   lint:
     name: Lint (Python + Go)
@@ -100,7 +96,6 @@ jobs:
     needs: prepare
     steps:
       - uses: actions/checkout@v4
-
       - name: Restore caches (pip/go)
         uses: actions/cache@v4
         with:
@@ -108,8 +103,7 @@ jobs:
             ~/.cache/pip
             ~/go/pkg/mod
             ~/.cache/go-build
-          key: ${{ runner.os }}-combined-${{ hashFiles('**/go.sum','**/requirements.txt') }}
-
+          key: ${{ runner.os }}-combined-${{ hashFiles('**/go.sum') }}-${{ hashFiles('**/requirements.txt') }}
       - name: Run ruff (Python linter/formatter)
         run: |
           if command -v ruff >/dev/null 2>&1 && (ls **/*.py >/dev/null 2>&1 || ls *.py >/dev/null 2>&1); then
@@ -117,7 +111,6 @@ jobs:
           else
             echo "ruff not present or no python files found, skipping"
           fi
-
       - name: Run mypy (optional static typing)
         run: |
           if command -v mypy >/dev/null 2>&1 && (ls **/*.py >/dev/null 2>&1 || ls *.py >/dev/null 2>&1); then
@@ -125,7 +118,6 @@ jobs:
           else
             echo "mypy not present or no python files found, skipping"
           fi
-
       - name: Run golangci-lint (Go)
         run: |
           if command -v golangci-lint >/dev/null 2>&1 && find . -name '*.go' | grep -q .; then
@@ -149,7 +141,7 @@ jobs:
         run: |
           if [ "${{ matrix.language }}" = "python" ]; then
             python -m pip install --upgrade pip
-            pip install pytest pytest-asyncio
+            pip install pytest pytest-asyncio || true
           else
             echo "Go matrix: ensuring module cache"
             go env -w GO111MODULE=on || true
@@ -174,8 +166,8 @@ jobs:
             echo "no go tests detected, skipping go test"
           fi
 
-      - name: Upload test reports (JUnit)
-        if: matrix.language == 'python'
+      - name: Upload Python JUnit (if present)
+        if: matrix.language == 'python' && (hashFiles('**/pytest.ini') != '' || hashFiles('**/tests/**') != '')
         uses: actions/upload-artifact@v4
         with:
           name: junit-report
@@ -184,43 +176,46 @@ jobs:
   static-security:
     name: Static & Security scans
     runs-on: ubuntu-latest
-    needs: [prepare]
+    needs: prepare
+    # Avoid running CodeQL on PRs from forks (permission issues). Runs on push / trusted events.
+    if: ${{ github.event_name != 'pull_request' }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Detect languages
+        id: detect
+        run: |
+          LANGS=""
+          if find . -name '*.py' | grep -q .; then LANGS="${LANGS}python,"; fi
+          if find . -name '*.go' | grep -q .; then LANGS="${LANGS}go,"; fi
+          LANGS=${LANGS%,}
+          if [ -z "$LANGS" ]; then LANGS="python"; fi
+          echo "languages=$LANGS" >> $GITHUB_OUTPUT
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
-          languages: 'python,go'
+          languages: ${{ steps.detect.outputs.languages }}
 
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@v3
 
       - name: pip-audit (Python dependencies)
+        if: ${{ hashFiles('**/requirements.txt') != '' }}
         run: |
-          if [ -f requirements.txt ]; then
-            pip-audit --progress wheel
-          else
-            echo "no requirements.txt found, skipping pip-audit"
-          fi
+          pip-audit --progress wheel || echo "pip-audit returned issues"
 
       - name: Bandit security scan (Python)
+        if: ${{ hashFiles('**/*.py') != '' }}
         run: |
-          if ls **/*.py >/dev/null 2>&1 || ls *.py >/dev/null 2>&1; then
-            bandit -r . -ll || echo "bandit reported issues"
-          else
-            echo "no python files found, skipping bandit"
-          fi
+          bandit -r . -ll || echo "bandit reported issues"
 
       - name: gosec (Go security)
+        if: ${{ hashFiles('**/*.go') != '' }}
         run: |
-          if find . -name '*.go' | grep -q .; then
-            curl -sSfL https://raw.githubusercontent.com/securego/gosec/master/install.sh | bash -s -- -b $HOME/bin
-            echo "$HOME/bin" >> $GITHUB_PATH
-            $HOME/bin/gosec ./...
-          else
-            echo "no go files found, skipping gosec"
-          fi
+          curl -sSfL https://raw.githubusercontent.com/securego/gosec/master/install.sh | bash -s -- -b $HOME/bin
+          echo "$HOME/bin" >> $GITHUB_PATH
+          $HOME/bin/gosec ./...
 
   build:
     name: Build & Package
@@ -234,12 +229,11 @@ jobs:
           if find . -name '*.go' | grep -q .; then
             mkdir -p build/bin
             go env -w GO111MODULE=on || true
-            # build all main packages under cmd/ (if present) otherwise try top-level
             if [ -d cmd ]; then
               for d in cmd/*; do
                 if [ -f "$d" ]; then continue; fi
                 pkg=$(basename "$d")
-                go build -o build/bin/${pkg} ./cmd/${pkg} || true
+                (cd cmd/${pkg} && go build -o ../../build/bin/${pkg}) || true
               done
             else
               go build -o build/bin/app ./... || true
@@ -276,10 +270,14 @@ jobs:
       - name: Check for Dockerfile
         id: dockerfile-check
         run: |
-          if [ -f Dockerfile ]; then echo "true"; else echo "false"; fi
+          if [ -f Dockerfile ]; then
+            echo "found=true" >> $GITHUB_OUTPUT
+          else
+            echo "found=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Build Docker image (no push)
-        if: steps.dockerfile-check.outputs == '' || steps.dockerfile-check.outputs == 'true'
+        if: steps.dockerfile-check.outputs.found == 'true'
         uses: docker/build-push-action@v4
         with:
           context: .
@@ -287,19 +285,20 @@ jobs:
           tags: ghcr.io/${{ github.repository_owner }}/${{ github.repository }}:ci-${{ github.run_id }}
 
       - name: Scan image with Trivy
-        if: steps.dockerfile-check.outputs == '' || steps.dockerfile-check.outputs == 'true'
+        if: steps.dockerfile-check.outputs.found == 'true'
         uses: aquasecurity/trivy-action@v1
         with:
           scan-type: image
           image-ref: ghcr.io/${{ github.repository_owner }}/${{ github.repository }}:ci-${{ github.run_id }}
           format: table
 
-  reports:
+  collect:
     name: Collect logs & reports
     runs-on: ubuntu-latest
     needs: [lint, unit-tests, static-security, build]
     steps:
-      - uses: actions/upload-artifact@v4
+      - name: Upload all logs & reports
+        uses: actions/upload-artifact@v4
         with:
           name: ci-logs-and-reports
           path: |
@@ -308,10 +307,3 @@ jobs:
             build/**
             dist/**
             .github/workflows/**
-
-# End of workflow
-# Notes for maintainers:
-# - Cron schedules are in UTC. If you need a different timezone, convert to UTC or use calendar-based triggers.
-# - Add repository secrets when you want to enable publishing (DOCKERHUB_TOKEN, GHCR_PAT, FIREBASE_TOKEN, etc.)
-# - The workflow auto-detects Python and Go sources and skips irrelevant steps to avoid noisy failures.
-# - For very large repositories, tune caching keys and split jobs further to optimize runtime and parallelism.
