@@ -1,185 +1,47 @@
-name: Build, Test, Scan, and Deploy
+name: Deploy and Scan
 
 on:
   push:
     branches:
       - main
-  pull_request:
-    branches:
-      - main
 
 jobs:
-  build-and-test:
+  build_and_push:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v3
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name DOCKER_USERNAME
+        uses: docker/login-action@v2
         with:
-          python-version: '3.12'
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Cache pip packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
-      - name: Cache Core Binaries
-        uses: actions/cache@v4
-        id: cache-cores
-        with:
-          path: cores
-          key: ${{ runner.os }}-cores-${{ hashFiles('install.py') }}
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pip-audit
-
-      - name: Audit for security vulnerabilities
-        run: pip-audit
-
-      - name: Setup Project Cores
-        if: steps.cache-cores.outputs.cache-hit != 'true'
-        run: python install.py
-
-      - name: Run tests
-        run: |
-          mkdir -p reports
-          pytest -q --maxfail=1 --junitxml=reports/junit.xml
-      
-      - name: Upload test reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-reports
-          path: reports/junit.xml
-
-  e2e-run:
-    runs-on: ubuntu-latest
-    needs: build-and-test
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      
-      - name: Cache pip packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-
-      - name: Cache Core Binaries
-        uses: actions/cache@v4
-        with:
-          path: cores
-          key: ${{ runner.os }}-cores-${{ hashFiles('install.py') }}
-      
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          python install.py
-      
-      - name: Run Application End-to-End
-        run: |
-          python3 -m src.fetcher
-          python3 -m src.xray_tester
-          python3 -m src.hiddify_tester
-          python3 -m src.filter
-          python3 -m src.reporter
-      
-      - name: Upload execution output
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: application-output
-          path: output/
-
-  security-scan:
-    runs-on: ubuntu-latest
-    needs: build-and-test
-    permissions:
-      security-events: write
-      actions: read
-      contents: read
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      
-      - name: Cache Core Binaries
-        uses: actions/cache@v4
-        with:
-          path: cores
-          key: ${{ runner.os }}-cores-${{ hashFiles('install.py') }}
-
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
-        with:
-          languages: python
-
-      - name: Install Dependencies and Setup Cores
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          python install.py
-
-      - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
-
-  build-and-push-docker:
-    runs-on: ubuntu-latest
-    needs: [e2e-run, security-scan]
-    if: github.ref == 'refs/heads/main'
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
+      - name: Build and push
+        uses: docker/build-push-action@v4
         with:
           context: .
+          file: ./Dockerfile
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:latest
+          tags: ${{ secrets.DOCKER_USERNAME }}/hiddify-next:latest
 
-  deploy:
+  scan:
+    needs: build_and_push
     runs-on: ubuntu-latest
-    needs: build-and-push-docker
-    if: github.ref == 'refs/heads/main'
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v3
 
-      - name: Deploy to Firebase
-        env:
-          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
-        run: |
-          if [ -z "$FIREBASE_TOKEN" ]; then
-            echo "FIREBASE_TOKEN is not set. Skipping deployment."
-          else
-            ./scripts/deploy_firebase.sh
-          fi
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@0.10.0
+        with:
+          image-ref: '''${{ secrets.DOCKER_USERNAME }}/hiddify-next:latest'''
+          format: '''table'''
+          exit-code: '''1'''
+          ignore-unfixed: true
+          vuln-type: '''os,library'''
+          severity: '''CRITICAL,HIGH'''
