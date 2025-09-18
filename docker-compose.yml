@@ -1,0 +1,60 @@
+# -------------------------------------------------------------------
+# Super Pipeline Container Orchestration
+# - Orchestrates the project services
+# - Auto-detects Python + Go components (via Dockerfile)
+# - Supports volumes, logging, healthcheck, and scheduled tasks
+# -------------------------------------------------------------------
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: superpipeline_app:latest
+    container_name: superpipeline_app
+    restart: unless-stopped
+
+    # Optional environment file for secrets/configs
+    env_file:
+      - .env
+
+    environment:
+      PYTHONUNBUFFERED: "1"
+      LOG_LEVEL: "INFO"
+
+    ports:
+      - "8080:8080"  # main service
+      - "9090:9090"  # optional secondary port
+
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 1m
+      timeout: 10s
+      retries: 5
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  ci-helper:
+    image: superpipeline_app:latest
+    container_name: superpipeline_ci_helper
+    entrypoint: /bin/sh
+    command: -c "while true; do echo '[CI-Helper] Running scheduled CI tasks'; sleep 3600; done"
+    restart: unless-stopped
+    depends_on:
+      - app
+
+volumes:
+  logs:
+  data:
+
+networks:
+  default:
+    driver: bridge
