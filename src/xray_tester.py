@@ -19,14 +19,57 @@ import aiosocks
 
 from .network_metrics import Metrics
 from .tester_base import NodeTester
+from .config import Config
+from .utils import get_node_id
 
+class XrayProcessManager:
+    """Manages the lifecycle of an Xray subprocess."""
+
+    def __init__(self, binary_path: str, config_path: str):
+        self.binary_path = binary_path
+        self.config_path = config_path
+        self.proc: Optional[asyncio.subprocess.Process] = None
+        self.logger = logging.getLogger(self.__class__.__name__)
+
+    async def start(self) -> bool:
+        """Starts the Xray process and returns True on success."""
+        try:
+            cmd = [self.binary_path, "-c", self.config_path]
+            self.proc = await asyncio.create_subprocess_exec(
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            )
+            await asyncio.sleep(Config.XRAY_STARTUP_DELAY)
+
+            if self.proc.returncode is not None:
+                stderr = (await self.proc.stderr.read()).decode(errors='ignore')
+                self.logger.warning(f"Xray process failed to start. Stderr: {stderr}")
+                return False
+            self.logger.debug("Xray process started successfully.")
+            return True
+        except Exception as e:
+            self.logger.error(f"Exception starting Xray process: {e}", exc_info=True)
+            return False
+
+    async def stop(self) -> None:
+        """Stops the Xray process if it is running."""
+        if self.proc and self.proc.returncode is None:
+            try:
+                self.proc.terminate()
+                await asyncio.wait_for(self.proc.wait(), timeout=5)
+                self.logger.debug("Xray process terminated.")
+            except asyncio.TimeoutError:
+                self.proc.kill()
+                await self.proc.wait()
+                self.logger.warning("Xray process was killed forcefully.")
+            except Exception as e:
+                self.logger.error(f"Error stopping Xray process: {e}", exc_info=True)
 
 class XrayTester(NodeTester):
     """A NodeTester that uses the Xray-core binary to test proxy nodes."""
 
     SOCKS_PORT = 10808
-    TEST_URL = "https://speed.cloudflare.com/__down?bytes=5000000"  # 5MB
-    DOWNLOAD_BYTES = 5000000
+    TEST_URL = Config.TEST_URL
+    DOWNLOAD_BYTES = Config.DOWNLOAD_SIZE_BYTES
 
     def __init__(self, xray_binary_path: str, cache_dir: str, http_timeout: int):
         self.binary_path = xray_binary_path
@@ -37,139 +80,94 @@ class XrayTester(NodeTester):
     def _generate_config(self, config_line: str) -> Optional[Dict[str, Any]]:
         """Generates a valid Xray JSON configuration from a single node URL."""
         try:
-            # Basic parsing for protocol type
-            protocol = config_line.split("://")[0]
-            if not protocol:
+            from .parsers import parse_v2ray_uri
+            
+            outbound_settings = parse_v2ray_uri(config_line)
+            if not outbound_settings:
+                self.logger.debug(f"Could not parse URI: {config_line[:40]}...")
                 return None
 
-            # This is a highly simplified config generator.
-            # A production-ready version would need a robust V2Ray link parser.
             return {
                 "log": {"loglevel": "warning"},
-                "inbounds": [
-                    {
-                        "port": self.SOCKS_PORT,
-                        "protocol": "socks",
-                        "listen": "127.0.0.1",
-                        "settings": {"auth": "noauth", "udp": False},
-                    }
-                ],
-                "outbounds": [
-                    {
-                        "protocol": protocol,
-                        "settings": {},
-                        "streamSettings": {},
-                        # The config_line itself often can't be just dumped in.
-                        # This part needs a proper parser to deconstruct the line.
-                        # We'll make a simplistic assumption for vmess.
-                    }
-                ],
+                "inbounds": [{
+                    "port": self.SOCKS_PORT,
+                    "protocol": "socks",
+                    "listen": "127.0.0.1",
+                    "settings": {"auth": "noauth", "udp": False}
+                }],
+                "outbounds": [outbound_settings],
             }
         except Exception as e:
-            self.logger.error(f"Failed to generate base config: {e}")
+            self.logger.error(f"Failed to generate Xray config for {config_line[:40]}: {e}", exc_info=True)
             return None
 
     async def test_node(self, config_line: str) -> Optional[Metrics]:
-        """Tests a single proxy configuration using Xray-core and returns its metrics."""
-        # This method is a placeholder. The real logic is now in _get_real_metrics.
-        # The process is: generate config, run Xray, test via proxy, kill Xray.
-        
-        # A proper implementation for parsing various link types is complex.
-        # For now, we'll assume the link is in a format that can be broadly used,
-        # which is a major simplification.
+        """Tests a single proxy configuration and returns its metrics."""
+        node_id = get_node_id(config_line)
         xray_config_obj = self._generate_config(config_line)
         if not xray_config_obj:
-            return None
+            return Metrics(success=False)
 
-        # This is where a proper link parser would populate the outbound settings.
-        # Since we lack one, this tester will have limited compatibility.
-        # For demonstration, we assume the config line is a JSON object for the outbound.
+        with tempfile.NamedTemporaryFile('w', delete=False, suffix=".json", dir=self.cache_dir) as f:
+            config_path = f.name
+            json.dump(xray_config_obj, f)
+        
+        manager = XrayProcessManager(self.binary_path, config_path)
         try:
-            # This is not how real links work, but it's a way to test the pipeline.
-            # A real implementation would parse vmess://, ss://, etc.
-            pass # Skipping the complex parsing logic for now
-        except Exception:
-            return None
-
-        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix=".json", dir=self.cache_dir) as tmp_f:
-            config_path = tmp_f.name
-            # This is still a placeholder for a valid config
-            json.dump(xray_config_obj, tmp_f)
-
-        proc = None
-        try:
-            cmd = [self.binary_path, "-c", config_path]
-            proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            if not await manager.start():
+                return Metrics(success=False)
             
-            # Give Xray a moment to start up
-            await asyncio.sleep(2)
-
-            # Check if the process started correctly
-            if proc.returncode is not None:
-                stderr = await proc.stderr.read()
-                self.logger.warning(f"Xray failed to start for node {config_line[:40]}. Stderr: {stderr.decode(errors='ignore')}")
-                return None
-
             return await self._measure_performance()
-
         except Exception as e:
-            self.logger.error(f"An error occurred while testing node {config_line[:40]}: {e}")
-            return None
+            self.logger.error(f"Error during test of node {node_id}: {e}", exc_info=True)
+            return Metrics(success=False)
         finally:
-            if proc and proc.returncode is None:
-                proc.terminate()
-                await proc.wait()
+            await manager.stop()
             if os.path.exists(config_path):
                 os.remove(config_path)
 
-    async def _measure_performance(self) -> Optional[Metrics]:
-        """Measures latency and throughput by downloading a file through the SOCKS proxy."""
+    async def _measure_performance(self) -> Metrics:
+        """Measures latency and throughput by downloading a file."""
         try:
-            # Setup the SOCKS5 connector
-            connector = aiohttp.TCPConnector(ssl=False) # SSL is handled by the proxy connection
             proxy_url = f"socks5://127.0.0.1:{self.SOCKS_PORT}"
+            timeout = aiohttp.ClientTimeout(total=self.http_timeout)
 
-            start_time = time.monotonic()
-            
-            async with aiohttp.ClientSession(connector=connector) as session:
-                # Measure latency (time to first byte)
-                async with session.get(self.TEST_URL, proxy=proxy_url, timeout=self.http_timeout) as response:
+            async with aiohttp.ClientSession() as session:
+                start_time = time.monotonic()
+                async with session.get(self.TEST_URL, proxy=proxy_url, timeout=timeout) as response:
                     if response.status != 200:
-                        self.logger.warning(f"Test URL returned status {response.status}")
-                        return None
+                        return Metrics(success=False)
                     
-                    latency = (time.monotonic() - start_time) * 1000  # in ms
+                    latency = (time.monotonic() - start_time) * 1000
 
-                    # Measure throughput
                     download_start = time.monotonic()
                     content = await response.content.read()
                     download_time = time.monotonic() - download_start
 
-                    if download_time > 0:
+                    if download_time > 0 and len(content) == self.DOWNLOAD_BYTES:
                         throughput = (self.DOWNLOAD_BYTES / download_time) / 1024 # KB/s
+                        jitter = abs(latency - ((time.monotonic() - start_time) * 1000 - latency))/2
                     else:
-                        throughput = float('inf')
+                        return Metrics(success=False, latency_ms=latency)
 
             return Metrics(
                 success=True,
                 latency_ms=latency,
+                jitter_ms=jitter,
                 throughput_kbps=throughput
             )
-
-        except aiosocks.errors.ProxyError as e:
-            self.logger.warning(f"Proxy connection failed: {e}")
-            return None
-        except asyncio.TimeoutError:
-            self.logger.warning("Measurement timed out.")
-            return None
+        except (aiosocks.errors.ProxyError, asyncio.TimeoutError) as e:
+            self.logger.debug(f"Measurement failed: {e}")
+            return Metrics(success=False)
         except Exception as e:
-            self.logger.error(f"Failed during performance measurement: {e}")
-            return None
+            self.logger.error(f"Unexpected error in measurement: {e}", exc_info=True)
+            return Metrics(success=False)
 
     async def __aenter__(self):
         if not os.path.exists(self.binary_path) or not os.access(self.binary_path, os.X_OK):
             raise FileNotFoundError(f"Xray binary not found or not executable at {self.binary_path}")
-        self.logger.info("XrayTester initialized and binary found.")
+        os.makedirs(self.cache_dir, exist_ok=True)
+        self.logger.info("XrayTester initialized.")
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):

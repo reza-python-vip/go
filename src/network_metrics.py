@@ -9,7 +9,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Optional
+import math
 
+from .config import Config
 
 @dataclass
 class Metrics:
@@ -19,82 +21,76 @@ class Metrics:
     jitter_ms: Optional[float] = None
     packet_loss: Optional[float] = None
     throughput_kbps: Optional[float] = None
+    reliability: Optional[float] = 1.0  # Default to 1.0 (100% reliable)
 
 
 class MetricsAnalyzer:
     """Provides static methods for analyzing and scoring network metrics."""
 
-    # Define weights for each metric component in the score calculation
-    LATENCY_WEIGHT = 0.40
-    THROUGHPUT_WEIGHT = 0.50
-    PACKET_LOSS_WEIGHT = 0.10
-
-    # Define ideal and unacceptable values for normalization
-    IDEAL_LATENCY_MS = 50
-    MAX_ACCEPTABLE_LATENCY_MS = 1500
-    
-    IDEAL_THROUGHPUT_KBPS = 10000  # 10 MB/s
-    MIN_ACCEPTABLE_THROUGHPUT_KBPS = 100
-
-    IDEAL_PACKET_LOSS = 0
-    MAX_ACCEPTABLE_PACKET_LOSS = 5 # 5%
+    @staticmethod
+    def _normalize_log(value: float, ideal: float) -> float:
+        """Normalizes a value using a logarithmic scale where lower is better."""
+        if value is None or value <= 0: return 0.0
+        if ideal <= 0: ideal = 1
+        return max(0.0, min(1.0, ideal / value))
 
     @staticmethod
-    def _normalize(value: float, min_val: float, max_val: float, reverse: bool = False) -> float:
-        """Normalizes a value to a 0-1 scale. If reverse is True, lower is better."""
+    def _normalize_linear(value: float, min_val: float, max_val: float, reverse: bool = False) -> float:
+        """Normalizes a value to a 0-1 scale."""
         if reverse:
-            value, min_val, max_val = max_val - value, max_val - max_val, max_val - min_val
-        
-        normalized = (value - min_val) / (max_val - min_val)
-        return max(0.0, min(1.0, normalized)) # Clamp between 0 and 1
+            if value >= max_val: return 0.0
+            if value <= min_val: return 1.0
+            return (max_val - value) / (max_val - min_val)
+        else:
+            if value <= min_val: return 0.0
+            if value >= max_val: return 1.0
+            return (value - min_val) / (max_val - min_val)
+    
+    @staticmethod
+    def _get_latency_score(latency_ms: float) -> float:
+        return MetricsAnalyzer._normalize_log(latency_ms, Config.IDEAL_LATENCY_MS)
+
+    @staticmethod
+    def _get_jitter_score(jitter_ms: float) -> float:
+        return MetricsAnalyzer._normalize_linear(
+            jitter_ms, Config.IDEAL_JITTER_MS, Config.MAX_JITTER_MS, reverse=True
+        )
+
+    @staticmethod
+    def _get_throughput_score(throughput_kbps: float) -> float:
+        return MetricsAnalyzer._normalize_linear(
+            throughput_kbps, 0, Config.IDEAL_THROUGHPUT_KBPS
+        )
+    
+    @staticmethod
+    def _get_packet_loss_score(packet_loss: float) -> float:
+        return MetricsAnalyzer._normalize_linear(
+            packet_loss, Config.IDEAL_PACKET_LOSS, Config.MAX_PACKET_LOSS, reverse=True
+        )
 
     @staticmethod
     def score(metrics: Optional[Metrics]) -> float:
-        """Calculates a quality score (0.0 to 100.0) for a node based on its metrics.
-
-        A score of 0 indicates a failed or unusable node.
-        Higher scores indicate better performance.
-        """
-        if not metrics or not metrics.success:
+        """Calculates a quality score (0.0 to 100.0) for a node."""
+        if not metrics or not metrics.success or metrics.latency_ms is None or metrics.throughput_kbps is None or metrics.jitter_ms is None:
             return 0.0
 
-        # Ensure required metrics are present
-        if metrics.latency_ms is None or metrics.throughput_kbps is None:
-            return 0.0
+        scores = {
+            'latency': MetricsAnalyzer._get_latency_score(metrics.latency_ms),
+            'jitter': MetricsAnalyzer._get_jitter_score(metrics.jitter_ms),
+            'throughput': MetricsAnalyzer._get_throughput_score(metrics.throughput_kbps),
+            'packet_loss': MetricsAnalyzer._get_packet_loss_score(metrics.packet_loss or 0)
+        }
 
-        # --- Latency Score ---
-        # Lower latency is better (reverse normalization)
-        latency_score = MetricsAnalyzer._normalize(
-            metrics.latency_ms,
-            MetricsAnalyzer.IDEAL_LATENCY_MS,
-            MetricsAnalyzer.MAX_ACCEPTABLE_LATENCY_MS,
-            reverse=True
-        )
+        weights = {
+            'latency': Config.LATENCY_WEIGHT,
+            'jitter': Config.JITTER_WEIGHT,
+            'throughput': Config.THROUGHPUT_WEIGHT,
+            'packet_loss': Config.PACKET_LOSS_WEIGHT
+        }
 
-        # --- Throughput Score ---
-        # Higher throughput is better
-        throughput_score = MetricsAnalyzer._normalize(
-            metrics.throughput_kbps,
-            MetricsAnalyzer.MIN_ACCEPTABLE_THROUGHPUT_KBPS,
-            MetricsAnalyzer.IDEAL_THROUGHPUT_KBPS
-        )
-
-        # --- Packet Loss Score ---
-        packet_loss = metrics.packet_loss if metrics.packet_loss is not None else 0
-        # Lower packet loss is better (reverse normalization)
-        loss_score = MetricsAnalyzer._normalize(
-            packet_loss,
-            MetricsAnalyzer.IDEAL_PACKET_LOSS,
-            MetricsAnalyzer.MAX_ACCEPTABLE_PACKET_LOSS,
-            reverse=True
-        )
+        final_score = sum(scores[key] * weights[key] for key in scores)
         
-        # --- Final Weighted Score ---
-        final_score = (
-            latency_score * MetricsAnalyzer.LATENCY_WEIGHT +
-            throughput_score * MetricsAnalyzer.THROUGHPUT_WEIGHT +
-            loss_score * MetricsAnalyzer.PACKET_LOSS_WEIGHT
-        )
+        reliability_factor = metrics.reliability if metrics.reliability is not None else 1.0
+        final_score *= (Config.RELIABILITY_WEIGHT * reliability_factor + (1-Config.RELIABILITY_WEIGHT))
 
-        # Return score as a percentage
-        return final_score * 100
+        return max(0.0, final_score * 100)

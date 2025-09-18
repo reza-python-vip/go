@@ -1,17 +1,98 @@
+# Python
 __pycache__/
-cores/
-output/
-logs/
-.venv/
+*.py[cod]
+*$py.class
+*.so
+.Python
 env/
-*.pyc
-*.pyo
-*.pyd
-*.log
-dist/
-build/
+venv/
+ENV/
+.venv
 *.egg-info/
-node_modules/
+.installed.cfg
+*.egg
+
+# Logs
+*.log
+logs/
+*.logs
+
+# Output
+output/*
+!output/.gitkeep
+!output/reports/
+!output/stats/
+!output/backups/
+
+# Cores
+cores/*
+!cores/.gitkeep
+
+# Cache
+.cache/
+cache/
+.nox/
+.coverage
+.coverage.*
+*.cover
+.hypothesis/
 .pytest_cache/
-secrets.env
+
+# Environment
 .env
+.venv
+env/
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary files
+/tmp/
+/temp/
+*.tmp
+*.temp
+
+# Docker
+.docker/
+docker-compose.override.yml
+
+# Build artifacts
+build/
+dist/
+*.tar.gz
+*.whl
+
+# Security
+*.key
+*.cert
+*.pem
+*.crt
+
+# Backup files
+*.bak
+*.backup
+
+# Large files
+*.large
+*.h5
+*.model
+*.weights
+
+# Local development
+.local/
+.devcontainer/
