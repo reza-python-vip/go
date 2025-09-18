@@ -1,101 +1,79 @@
-name: Proxy + Firebase CI
+name: Deploy and Scan Proxies
 
+# TRIGGERS
+# This workflow runs:
+# 1. On a schedule (every 6 hours).
+# 2. When manually dispatched from the GitHub Actions UI.
+# 3. On every push to the `main` branch.
 on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch: {}
   push:
     branches:
       - main
-  workflow_dispatch:
-  schedule:
-    - cron: '0 */6 * * *'
-    - cron: '0 2 * * *'
 
+# PERMISSIONS
+# Grants the workflow permissions to write to the repository contents.
+# This is absolutely essential for the "commit and push" step to work.
 permissions:
   contents: write
 
 jobs:
-  run-and-commit:
+  scan-and-commit-results:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Repository
+      - name: 1. Checkout Repository
         uses: actions/checkout@v4
+        with:
+          # Fetch all history for accurate change detection
+          fetch-depth: 0
 
-      - name: Set up Python
+      - name: 2. Set up Python Environment
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
+          cache: 'pip' # Cache dependencies for faster runs
 
-      - name: Install Python Dependencies
+      - name: 3. Install Python Dependencies
         run: pip install -r requirements.txt
 
-      - name: Bootstrap Cores (Download Xray/Hiddify)
+      - name: 4. Bootstrap and Download Core Binaries
         run: bash ./bootstrap.sh
-
-      - name: Run the Main Application
+        env:
+          # CRITICAL: This environment variable tells the bootstrap script to download
+          # the actual Xray and Hiddify binaries, not just create placeholder stubs.
+          # Without this, the scanner would fail.
+          DOWNLOAD_CORES: 1
+      
+      - name: 5. Run the Scanner
         run: python -m src.main
+        # This executes the core logic of the application:
+        # Fetches -> Tests -> Filters -> Generates output files.
 
-      - name: Configure Git
+      - name: 6. Configure Git for Commit
         run: |
           git config --global user.name 'GitHub Actions Bot'
-          git config --global user.email 'github-actions-bot@github.com'
+          git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
 
-      - name: Commit and Push Changes
+      - name: 7. Commit and Push Updated Subscriptions
         run: |
+          # Add all changes within the 'subscription' directory.
+          # The -A flag ensures that file deletions are also staged.
           git add -A subscription/
-          if git diff --staged --quiet; then
-            echo "No changes to commit."
+
+          # Check if there are any staged changes.
+          # The "git diff" command will exit with a non-zero status if there are changes.
+          if ! git diff --staged --quiet; then
+            echo "✅ Changes detected in subscription files. Committing and pushing..."
+            # Create a commit with a timestamp.
+            git commit -m "🚀 Auto-update subscriptions on $(date -u)"
+            
+            # Push the changes to the current branch.
+            # Using `github.ref_name` makes this robust for any branch.
+            git push origin ${{ github.ref_name }}
+            
+            echo "✅ Successfully pushed updated files."
           else
-            git commit -m "Update subscriptions on $(date -u)"
-            git push origin main
+            echo "✅ No changes to subscription files. Nothing to commit."
           fi
-
-  deploy-and-scan:
-    runs-on: ubuntu-latest
-    env:
-      REPORT_URL: ${{ secrets.SCAN_REPORT_URL }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-
-      - name: Install system deps
-        run: sudo apt-get update && sudo apt-get install -y curl unzip nodejs npm
-
-      - name: Install Python deps
-        run: pip install -r requirements.txt
-
-      - name: Authenticate to GCP (optional)
-        if: ${{ env.GCP_SA_KEY != '' }}
-        env:
-          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
-          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-        run: |
-          echo "$GCP_SA_KEY" > /tmp/gcp_key.json
-          gcloud auth activate-service-account --key-file=/tmp/gcp_key.json
-          gcloud config set project "$GCP_PROJECT_ID"
-
-      - name: Deploy Firebase functions + hosting (optional)
-        env:
-          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
-        if: ${{ env.FIREBASE_TOKEN != '' }}
-        run: |
-          cd firebase/functions && npm install || true
-          firebase deploy --only functions,hosting --token "$FIREBASE_TOKEN" || true
-
-      - name: Run bootstrap
-        run: bash ./bootstrap.sh
-
-      - name: Run smoke scan
-        run: python -m run_smoke_scan
-        env:
-          REPORT_URL: ${{ secrets.SCAN_REPORT_URL || 'https://default-report-url.example.com' }}
-          REPORT_API_KEY: ${{ secrets.SCAN_REPORT_API_KEY != '' && secrets.SCAN_REPORT_API_KEY || 'default-api-key' }}
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: scanner-output
-          path: output/**
