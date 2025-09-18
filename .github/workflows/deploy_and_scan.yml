@@ -1,4 +1,4 @@
-"# CI — Super Pipeline
+# CI — Super Pipeline
 # Automatically runs every hour (UTC) and can be triggered manually.
 # Purpose: robust linting, testing, static analysis, security scans, build, and artifact collection
 # Designed to work for mixed Python + Go repositories (auto-detects sources)
