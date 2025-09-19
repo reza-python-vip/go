@@ -44,11 +44,86 @@ logger = logging.getLogger(__name__)
 
 
 class Config(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        case_sensitive=False,
-    )
+    """Application configuration with validation."""
+    
+    # Network settings
+    XRAY_SOCKS_PORT_START: int = Field(default=10000, gt=1024, lt=65535)
+    XRAY_SOCKS_PORT_END: int = Field(default=20000, gt=1024, lt=65535)
+    HTTP_TIMEOUT: float = Field(default=5.0, gt=0)
+    TCP_TIMEOUT: float = Field(default=3.0, gt=0)
+    CONNECTION_TIMEOUT: float = Field(default=4.0, gt=0)
+    DOWNLOAD_TIMEOUT: float = Field(default=8.0, gt=0)
+    
+    # File paths
+    XRAY_BINARY: Path = Field(default=Path("xray"))
+    CONFIG_FILE: Path = Field(default=Path("config.yml"))
+    TEMP_DIR: Path = Field(default=Path("/tmp"))
+    OUTPUT_DIR: Path = Field(default=Path("output"))
+    
+    # Test settings
+    LATENCY_TEST_URL: str = Field(default="http://www.gstatic.com/generate_204")
+    STRICT: bool = Field(default=True)
+    KEEP_ALIVE: bool = Field(default=False)
+    HISTORY_FILE: Path = Field(default=Path("history.json"))
+    
+    class Config:
+        """Pydantic config."""
+        env_file = ".env"
+        env_file_encoding = "utf-8"
+        case_sensitive = False
+        
+    @validator("XRAY_SOCKS_PORT_END")
+    def validate_port_range(cls, v: int, values: Dict[str, Any]) -> int:
+        """Validate that port range is valid."""
+        start = values.get("XRAY_SOCKS_PORT_START", 10000)
+        if v <= start:
+            raise ValueError(f"XRAY_SOCKS_PORT_END ({v}) must be greater than XRAY_SOCKS_PORT_START ({start})")
+        return v
+    
+    @validator("XRAY_BINARY", "TEMP_DIR", "OUTPUT_DIR")
+    def validate_directories(cls, v: Path) -> Path:
+        """Validate that directories exist and are accessible."""
+        if not v.parent.exists():
+            try:
+                v.parent.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                raise ValueError(f"Could not create directory {v.parent}: {e}")
+        return v
+    
+    @validator("LATENCY_TEST_URL")
+    def validate_url(cls, v: str) -> str:
+        """Validate that URL is properly formatted."""
+        if not v.startswith(("http://", "https://")):
+            raise ValueError("LATENCY_TEST_URL must start with http:// or https://")
+        return v
+    
+    @root_validator
+    def validate_timeouts(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate that timeouts are properly configured."""
+        http_timeout = values.get("HTTP_TIMEOUT", 5.0)
+        tcp_timeout = values.get("TCP_TIMEOUT", 3.0)
+        connection_timeout = values.get("CONNECTION_TIMEOUT", 4.0)
+        download_timeout = values.get("DOWNLOAD_TIMEOUT", 8.0)
+        
+        # Connection timeout should be greater than TCP timeout
+        if connection_timeout <= tcp_timeout:
+            raise ValueError(f"CONNECTION_TIMEOUT ({connection_timeout}) must be greater than TCP_TIMEOUT ({tcp_timeout})")
+        
+        # Download timeout should be greater than HTTP timeout
+        if download_timeout <= http_timeout:
+            raise ValueError(f"DOWNLOAD_TIMEOUT ({download_timeout}) must be greater than HTTP_TIMEOUT ({http_timeout})")
+        
+        return values
+    
+    def get_metrics_config(self) -> Dict[str, float]:
+        """Get configuration for metrics collection."""
+        return {
+            "http_timeout": self.HTTP_TIMEOUT,
+            "tcp_timeout": self.TCP_TIMEOUT,
+            "connection_timeout": self.CONNECTION_TIMEOUT,
+            "download_timeout": self.DOWNLOAD_TIMEOUT
+        }
+
     # --- Core Paths ---
     BASE_DIR: Path = Path(__file__).parent.parent.resolve()
     LOGS_DIR: Path = BASE_DIR / "logs"

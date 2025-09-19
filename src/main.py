@@ -3,16 +3,19 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import os
 import sys
 from typing import List, Type
 
 import uvicorn
 try:
     from tqdm.asyncio import tqdm  # optional dependency
-except Exception:  # pragma: no cover - fallback when tqdm isn't installed
+except ImportError:  # pragma: no cover - fallback when tqdm isn't installed
     def tqdm(iterable, **kwargs):
         """Fallback tqdm: returns the iterable unchanged when tqdm is not available."""
         return iterable
+
+from .utils.logging import setup_logging
 
 from .config import config
 from .fetcher import fetch_subscription_links

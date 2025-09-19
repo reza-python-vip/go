@@ -8,6 +8,13 @@ import tempfile
 import time
 from typing import Optional
 
+from .exceptions import (
+    ConnectionTestError,
+    NodeTestError,
+    XrayConfigError,
+    XrayStartupError,
+)
+
 import aiohttp
 
 from .config import Config
@@ -45,12 +52,18 @@ class XrayManager:
     async def __aenter__(self) -> XrayManager:
         self.config_path = await self._create_config_file()
         if not self.config_path:
-            raise IOError("Failed to create Xray config file.")
+            raise XrayConfigError(f"Failed to parse or create config for node {self.node.node_id}")
+
+        if not os.path.exists(self.binary_path):
+            raise XrayStartupError(f"Xray binary not found at {self.binary_path}")
 
         cmd = [self.binary_path, "-c", self.config_path]
-        self.process = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-        )
+        try:
+            self.process = await asyncio.create_subprocess_exec(
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            )
+        except (OSError, asyncio.SubprocessError) as e:
+            raise XrayStartupError(f"Failed to start Xray process: {e}")
 
         try:
             # Wait for Xray to start by checking if the SOCKS port is open
@@ -59,9 +72,10 @@ class XrayManager:
             return self
         except asyncio.TimeoutError:
             stderr = await self.process.stderr.read()
-            logger.warning(f"Xray for {self.node.node_id} failed to start: {stderr.decode(errors='ignore')}")
-            await self.__aexit__(None, None, None) # Ensure cleanup
-            raise RuntimeError("Xray process failed to start")
+            error_msg = stderr.decode(errors='ignore')
+            logger.warning(f"Xray for {self.node.node_id} failed to start: {error_msg}")
+            await self.__aexit__(None, None, None)  # Ensure cleanup
+            raise XrayStartupError(f"Xray process failed to start: {error_msg}")
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if self.process and self.process.returncode is None:
@@ -129,9 +143,18 @@ class XrayTester:
             async with XrayManager(self.config.XRAY_BINARY, node, port, self.config.TEMP_DIR):
                 metrics = await self._perform_tests(port)
                 return NodeMetrics(node_id=node.node_id, **metrics)
+        except XrayConfigError as e:
+            logger.warning(f"Configuration error for node {node.node_id}: {e}")
+            return NodeMetrics(node_id=node.node_id, success=False, error="config_error")
+        except XrayStartupError as e:
+            logger.warning(f"Startup error for node {node.node_id}: {e}")
+            return NodeMetrics(node_id=node.node_id, success=False, error="startup_error")
+        except ConnectionTestError as e:
+            logger.warning(f"Connection test failed for node {node.node_id}: {e}")
+            return NodeMetrics(node_id=node.node_id, success=False, error="connection_error")
         except Exception as e:
-            logger.debug(f"Testing failed for node {node.node_id}: {e}")
-            return NodeMetrics(node_id=node.node_id, success=False)
+            logger.error(f"Unexpected error testing node {node.node_id}: {e}", exc_info=True)
+            return NodeMetrics(node_id=node.node_id, success=False, error="unknown_error")
         finally:
             await self.port_manager.release_port(port)
 
@@ -143,18 +166,38 @@ class XrayTester:
             latency = await self._measure_latency(proxy_url, timeout)
             throughput = await self._measure_throughput(proxy_url, timeout)
             return {"success": True, "latency_ms": latency, "throughput_kbps": throughput}
-        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            logger.debug(f"A test failed for port {port}: {e}")
-            raise
+        except aiohttp.ClientConnectorError as e:
+            logger.debug(f"Connection error on port {port}: {e}")
+            raise ConnectionTestError(f"Failed to connect: {e}")
+        except aiohttp.ClientResponseError as e:
+            logger.debug(f"HTTP error on port {port}: {e.status}")
+            raise ConnectionTestError(f"HTTP error {e.status}")
+        except asyncio.TimeoutError:
+            logger.debug(f"Connection timeout on port {port}")
+            raise ConnectionTestError("Connection timeout")
+        except Exception as e:
+            logger.error(f"Unexpected error in connection test on port {port}: {e}", exc_info=True)
+            raise ConnectionTestError(f"Unknown error: {e}")
 
     async def _measure_latency(self, proxy_url: str, timeout: aiohttp.ClientTimeout) -> float:
         url = self.config.LATENCY_TEST_URL
+        if not url:
+            raise XrayConfigError("LATENCY_TEST_URL not configured")
+
         start_time = time.monotonic()
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url, proxy=proxy_url) as response:
-                response.raise_for_status()
-                await response.read() # Consume body to get accurate timing
-        return (time.monotonic() - start_time) * 1000
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url, proxy=proxy_url) as response:
+                    response.raise_for_status()
+                    await response.read()  # Consume body to get accurate timing
+            return (time.monotonic() - start_time) * 1000
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            elapsed = (time.monotonic() - start_time) * 1000
+            logger.debug(f"Latency test failed after {elapsed:.2f}ms: {e}")
+            raise ConnectionTestError(f"Latency test failed: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error in latency test: {e}", exc_info=True)
+            raise ConnectionTestError(f"Latency test error: {e}")
 
     async def _measure_throughput(self, proxy_url: str, timeout: aiohttp.ClientTimeout) -> float:
         url = self.config.SPEED_TEST_URL

@@ -33,7 +33,7 @@ defaults:
 
 jobs:
   preflight:
-    name: Preflight: check required files & secrets
+    name: "Preflight: check required files & secrets"
     runs-on: ubuntu-latest
     outputs:
       ok: ${{ steps.check.outputs.ok }}
@@ -103,48 +103,53 @@ jobs:
             ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
 
-      - name: Install dev & test tools
+      - name: Install dev & test dependencies
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then python -m pip install -r requirements.txt || true; fi
-          python -m pip install --no-cache-dir flake8 bandit pip-audit pytest coverage ruff black isort autoflake || true
+          if [ -f requirements-dev.txt ]; then python -m pip install -r requirements-dev.txt; fi
+          if [ -f requirements-test.txt ]; then python -m pip install -r requirements-test.txt; fi
 
-      - name: Auto-fix Python (safe)
+      - name: Auto-format and lint with Ruff
         run: |
           set -euo pipefail
-          ruff check --fix . || true
-          isort . || true
-          files=$(git ls-files -- '*.py' || true)
-          if [ -n "$files" ]; then
-            printf "%s\n" $files | xargs --no-run-if-empty autoflake --in-place --remove-unused-variables --remove-all-unused-imports || true
+          ruff check --fix .
+          ruff format .
+
+      - name: Commit formatting changes
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add .
+          if ! git diff --staged --quiet; then
+            git commit -m "style: auto-format code with ruff"
+            git push
           fi
-          black . || true
 
       - name: Lint (flake8 strict)
         run: |
           set -euo pipefail
-          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+          ruff check . --select=E9,F63,F7,F82 --show-source --statistics
 
       - name: Security scan (bandit)
         run: |
           set -euo pipefail
-          bandit -r . -ll -ii || true
+          bandit -r . -ll -ii
 
       - name: Dependency audit (pip-audit)
         run: |
           set -euo pipefail
-          pip-audit --progress spinner || true
+          pip-audit --progress spinner
 
       - name: Run tests + coverage
         id: run_tests
         run: |
           set -euo pipefail
-          pytest --maxfail=1 --disable-warnings --cov=src --cov-report=xml || true
+          pytest --maxfail=1 --disable-warnings --cov=src --cov-report=xml
           if [ -f coverage.xml ]; then echo "coverage_exists=true" >> "$GITHUB_OUTPUT"; fi
 
       - name: Upload coverage (Codecov)
-        if: steps.run_tests.outputs.coverage_exists == 'true' && secrets.CODECOV_TOKEN != ''
+        if: steps.run_tests.outputs.coverage_exists == 'true' && github.token != ''
         uses: codecov/codecov-action@v3
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -175,25 +180,22 @@ jobs:
           path: ~/.cache/pip
           key: ubuntu-latest-pip-${{ hashFiles('**/requirements.txt') }}
 
-      - name: Install runtime deps
+      - name: Install runtime dependencies
         run: |
           set -euo pipefail
-          if [ -f requirements.txt ]; then python -m pip install --upgrade pip; pip install -r requirements.txt; fi
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
       - name: Optional installer (install.py)
         run: |
           set -euo pipefail
-          if [ -f install.py ]; then python install.py || true; fi
+          if [ -f install.py ]; then python install.py; fi
 
-      - name: Run scan pipeline (fetcher/testers/filter/reporter)
+      - name: Run scan pipeline (main)
         run: |
           set -euo pipefail
-          python -m src.fetcher || { echo "::error::fetcher failed"; exit 1; }
-          python -m src.xray_tester || { echo "::error::xray_tester failed"; exit 1; }
-          python -m src.hiddify_tester || { echo "::error::hiddify_tester failed"; exit 1; }
-          python -m src.filter || { echo "::error::filter failed"; exit 1; }
-          python -m src.reporter || { echo "::error::reporter failed"; exit 1; }
-          chmod +x scripts/verify_output.py || true
+          python -m src.main
+          chmod +x scripts/verify_output.py
           python scripts/verify_output.py
 
       - id: count
@@ -204,7 +206,7 @@ jobs:
           if [ -f output/all.txt ]; then cnt=$(wc -l < output/all.txt | tr -d ' '); fi
           echo "count=$cnt" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           name: scan-results
           path: |
@@ -231,11 +233,11 @@ jobs:
           GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
         run: |
           set -euo pipefail
-          chmod +x scripts/deploy_firebase.sh || true
+          chmod +x scripts/deploy_firebase.sh
           if [ -n "${FIREBASE_TOKEN:-}" ]; then
-            ./scripts/deploy_firebase.sh --token "$FIREBASE_TOKEN" --project "${GCP_PROJECT_ID:-}" || { echo "::error::Firebase deploy failed"; exit 1; }
+            ./scripts/deploy_firebase.sh --token "$FIREBASE_TOKEN" --project "${GCP_PROJECT_ID:-}"
           else
-            ./scripts/deploy_firebase.sh || { echo "::error::Firebase deploy failed (no FIREBASE_TOKEN)"; exit 1; }
+            ./scripts/deploy_firebase.sh
           fi
 
   notify:
@@ -257,7 +259,7 @@ jobs:
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account_email: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
 
       - id: token
         name: Get access token
@@ -273,32 +275,29 @@ jobs:
           PROXY_COUNT: ${{ needs.build_and_scan.outputs.proxy_count }}
         run: |
           set -euo pipefail
-          TITLE="Proxies Updated"
-          BODY="${PROXY_COUNT} new proxies are available!"
-          python - <<'PY' > payload.json
-import json, time, os
-payload = {
-  "message": {
-    "topic": "news",
-    "notification": {"title": os.getenv("TITLE","Proxies Updated"), "body": os.getenv("BODY","")},
-    "data": {"update_type":"proxy_list","proxy_count":str(os.getenv("PROXY_COUNT","0")),"timestamp":str(int(time.time()))}
-  }
-}
-print(json.dumps(payload))
-PY
+          if [ -z "${ACCESS_TOKEN}" ]; then
+            echo "::warning::FCM notification skipped: ACCESS_TOKEN is not available."
+            exit 0
+          fi
+          export TITLE="Proxies Updated"
+          export BODY="${PROXY_COUNT} new proxies are available!"
+          python notify_script.py
           curl -sS -X POST "https://fcm.googleapis.com/v1/projects/${GCP_PROJECT_ID}/messages:send" \
             -H "Authorization: Bearer ${ACCESS_TOKEN}" \
             -H "Content-Type: application/json" \
             --data-binary @payload.json
+          rm -f payload.json
 
   upload_release_assets:
     name: Upload Release Assets
     needs: build_and_scan
     if: github.event_name == 'release'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Download scan results
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: scan-results
           path: output
@@ -309,7 +308,7 @@ PY
           if [ ! -f output/all.txt ]; then echo "::error::Missing output/all.txt"; exit 1; fi
 
       - name: Upload files to release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: |
             output/all.txt
@@ -330,12 +329,12 @@ PY
       - name: Run installer (if present)
         run: |
           set -euo pipefail
-          if [ -f install.py ]; then python install.py || true; fi
+          if [ -f install.py ]; then python install.py; fi
 
       - name: Run scanner (quick)
         run: |
           set -euo pipefail
-          python -m src.main || true
+          python -m src.main --quick
 
       - name: Commit Results (best-effort)
         run: |

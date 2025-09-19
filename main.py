@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import signal
 import threading
 from pathlib import Path
 
 import uvicorn
+
+from src.utils.logging import setup_logging
 
 from src.config import Config
 from src.fetcher import SubscriptionFetcher
@@ -74,6 +77,13 @@ async def run_once(config: Config, history: HistoryManager, tester: XrayTester):
 
 async def main():
     """Main application entry point."""
+    # Setup logging
+    log_file = os.path.join("logs", "scanner.log") if os.path.isdir("logs") else None
+    setup_logging(
+        log_level=os.getenv("LOG_LEVEL", "INFO"),
+        log_file=log_file
+    )
+
     config = Config()
     history = HistoryManager(Path(config.OUTPUT_DIR))
     await history.load_history()
