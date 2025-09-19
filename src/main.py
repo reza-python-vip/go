@@ -7,6 +7,7 @@ It is designed to be run as the main script and leverages asyncio for concurrent
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import sys
 from typing import Dict, List, Optional
@@ -105,7 +106,7 @@ async def run_once() -> None:
     safe_write(Config.OUTPUT_PLAIN_PATH, plain_text_output)
     logging.info(f"Wrote {len(filtered_configs)} nodes to {Config.OUTPUT_PLAIN_PATH}")
 
-    subscription_content = base64.b64encode(\n.join(filtered_configs).encode()).decode()
+    subscription_content = base64.b64encode("\n".join(filtered_configs).encode()).decode()
     safe_write(Config.OUTPUT_BASE64_PATH, subscription_content)
     logging.info(f"Wrote base64 subscription to {Config.OUTPUT_BASE64_PATH}")
 

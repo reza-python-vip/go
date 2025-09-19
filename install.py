@@ -84,7 +84,7 @@ def extract_zip(zip_path, dest_dir, binary_name, final_name):
             
             # Rename and move
             extracted_path = os.path.join(dest_dir, binary_path_in_zip)
-            final_path = os.path.join(dest_dir, final_.path)
+            final_path = os.path.join(dest_dir, final_name)
             shutil.move(extracted_path, final_path)
 
             print_success(f"Extracted and moved to {final_path}")
