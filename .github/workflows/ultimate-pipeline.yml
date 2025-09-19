@@ -11,7 +11,7 @@ on:
     types: [created]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: "${{ github.workflow }}-${{ github.ref }}"
   cancel-in-progress: true
 
 permissions:
@@ -156,6 +156,8 @@ jobs:
     needs: [preflight, quality_and_security]
     if: needs.preflight.outputs.ok == 'true'
     runs-on: ubuntu-latest
+    outputs:
+      proxy_count: ${{ steps.count.outputs.count }}
     env:
       PYTHONPATH: src
       PYTHONUNBUFFERED: "1"
@@ -237,7 +239,7 @@ jobs:
 
   notify:
     name: Notify Users (FCM)
-    needs: [build_and_scan, deploy]
+    needs: [preflight, build_and_scan, deploy]
     if: needs.preflight.outputs.deploy_ready == 'true'
     runs-on: ubuntu-latest
     env:
