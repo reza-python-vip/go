@@ -1,6 +1,7 @@
 import json
 import time
 import os
+import sys
 
 payload = {
     "message": {
@@ -17,5 +18,4 @@ payload = {
     }
 }
 
-with open('payload.json', 'w') as f:
-    json.dump(payload, f)
+json.dump(payload, sys.stdout)

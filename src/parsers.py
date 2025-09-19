@@ -11,7 +11,6 @@ import base64
 import json
 import logging
 from typing import Any, Dict, Optional
-from urllib.parse import urlparse, unquote, parse_qs
 
 logger = logging.getLogger(__name__)
 

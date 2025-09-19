@@ -15,7 +15,6 @@ from src.config import Config
 from src.fetcher import SubscriptionFetcher
 from src.filter import filter_and_rank
 from src.health import app as health_app
-from src.health import main_loop_active
 from src.history import HistoryManager
 from src.models import Node
 from src.reporter import generate_report

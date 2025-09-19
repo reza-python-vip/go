@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import List, Dict
+from typing import List
 
 from .config import Config
 from .history import HistoryManager

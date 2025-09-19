@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
-import os
 import sys
 from typing import List, Type
 
@@ -15,7 +14,6 @@ except ImportError:  # pragma: no cover - fallback when tqdm isn't installed
         """Fallback tqdm: returns the iterable unchanged when tqdm is not available."""
         return iterable
 
-from .utils.logging import setup_logging
 
 from .config import config
 from .fetcher import fetch_subscription_links
@@ -154,7 +152,7 @@ def main():
     except (ValueError, FileNotFoundError) as e:
         logger.critical(f"Configuration error: {e}")
         sys.exit(1)
-    except Exception as e:
+    except Exception:
         logger.critical("An unexpected critical error occurred.", exc_info=True)
         sys.exit(1)
 

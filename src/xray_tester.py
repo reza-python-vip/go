@@ -10,7 +10,6 @@ from typing import Optional
 
 from .exceptions import (
     ConnectionTestError,
-    NodeTestError,
     XrayConfigError,
     XrayStartupError,
 )

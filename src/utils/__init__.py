@@ -71,8 +71,6 @@ __all__ = ["decode_base64_text", "safe_write", "PortManager", "get_open_port"]
 
 
 # Simple port utilities used by testers
-import socket
-from typing import Optional
 
 
 class PortManager:

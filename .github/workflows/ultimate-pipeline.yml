@@ -81,7 +81,7 @@ jobs:
           echo "deploy_ready=${deploy_ready}" >> "$GITHUB_OUTPUT"
 
   quality_and_security:
-    name: Cross-Platform Quality & Security
+    name: Cross-Platform Quality & Security # Invalidate cache
     needs: preflight
     if: needs.preflight.outputs.ok == 'true'
     strategy:
@@ -103,43 +103,40 @@ jobs:
             ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
 
-      - name: Install dev & test dependencies
+      - name: Install dependencies
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
           if [ -f requirements-dev.txt ]; then python -m pip install -r requirements-dev.txt; fi
           if [ -f requirements-test.txt ]; then python -m pip install -r requirements-test.txt; fi
+          python -m pip install -r requirements.txt
 
-      - name: Auto-format and lint with Ruff
+      - name: Lint and format with Ruff
         run: |
           set -euo pipefail
-          ruff check --fix .
-          ruff format .
+          python -m ruff check --fix .
+          python -m ruff format .
 
       - name: Commit formatting changes
-        run: |
-          git config --global user.name 'github-actions[bot]'
-          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          git add .
-          if ! git diff --staged --quiet; then
-            git commit -m "style: auto-format code with ruff"
-            git push
-          fi
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "style: auto-format code with ruff"
+          file_pattern: "*.py"
 
       - name: Lint (flake8 strict)
         run: |
           set -euo pipefail
-          ruff check . --select=E9,F63,F7,F82 --show-source --statistics
+          python -m ruff check . --select=E9,F63,F7,F82 --show-source --statistics
 
       - name: Security scan (bandit)
         run: |
           set -euo pipefail
-          bandit -r . -ll -ii
+          python -m bandit -r . -ll -ii
 
       - name: Dependency audit (pip-audit)
         run: |
           set -euo pipefail
-          pip-audit --progress spinner
+          python -m pip_audit --progress spinner
 
       - name: Run tests + coverage
         id: run_tests
@@ -216,28 +213,32 @@ jobs:
 
   deploy:
     name: Deploy to Firebase
-    needs: build_and_scan
+    needs: [preflight, build_and_scan]
     if: needs.preflight.outputs.deploy_ready == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Install firebase-tools
-        run: |
-          set -euo pipefail
-          npm ci -g firebase-tools@latest || npm install -g firebase-tools@latest
+        run: npm install -g firebase-tools
 
-      - name: Deploy via script (firebase)
+      - name: Deploy to Firebase
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
           GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
         run: |
           set -euo pipefail
-          chmod +x scripts/deploy_firebase.sh
-          if [ -n "${FIREBASE_TOKEN:-}" ]; then
-            ./scripts/deploy_firebase.sh --token "$FIREBASE_TOKEN" --project "${GCP_PROJECT_ID:-}"
+          if [[ -z "$FIREBASE_TOKEN" && -z "$GCP_PROJECT_ID" ]]; then
+            echo "::warning::Skipping deploy, no credentials provided."
+            exit 0
+          fi
+          
+          firebase use --add $GCP_PROJECT_ID
+          
+          if [[ -n "$FIREBASE_TOKEN" ]]; then
+            firebase deploy --only functions,hosting --token "$FIREBASE_TOKEN" --project "$GCP_PROJECT_ID"
           else
-            ./scripts/deploy_firebase.sh
+            firebase deploy --only functions,hosting --project "$GCP_PROJECT_ID"
           fi
 
   notify:
@@ -268,7 +269,7 @@ jobs:
           access_token=$(gcloud auth print-access-token) || { echo "::error::Unable to obtain access token"; exit 1; }
           echo "access_token=${access_token}" >> "$GITHUB_OUTPUT"
 
-      - name: Prepare payload and send FCM message
+      - name: Prepare and send FCM notification
         env:
           ACCESS_TOKEN: ${{ steps.token.outputs.access_token }}
           GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
@@ -279,14 +280,16 @@ jobs:
             echo "::warning::FCM notification skipped: ACCESS_TOKEN is not available."
             exit 0
           fi
+          
           export TITLE="Proxies Updated"
           export BODY="${PROXY_COUNT} new proxies are available!"
-          python notify_script.py
+          
+          PAYLOAD=$(python notify_script.py)
+          
           curl -sS -X POST "https://fcm.googleapis.com/v1/projects/${GCP_PROJECT_ID}/messages:send" \
             -H "Authorization: Bearer ${ACCESS_TOKEN}" \
             -H "Content-Type: application/json" \
-            --data-binary @payload.json
-          rm -f payload.json
+            -d "$PAYLOAD"
 
   upload_release_assets:
     name: Upload Release Assets
@@ -326,6 +329,12 @@ jobs:
           python-version: '3.10'
           cache: 'pip'
 
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then python -m pip install -r requirements.txt; fi
+
       - name: Run installer (if present)
         run: |
           set -euo pipefail
@@ -336,10 +345,8 @@ jobs:
           set -euo pipefail
           python -m src.main --quick
 
-      - name: Commit Results (best-effort)
-        run: |
-          git config --global user.name 'github-actions[bot]'
-          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          git add output/
-          git diff --staged --quiet || git commit -m "Scheduled: Update proxy subscription and report"
-          git push || echo "Push failed (repo may be read-only)"
+      - name: Commit Results
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Scheduled: Update proxy subscription and report"
+          file_pattern: "output/"
