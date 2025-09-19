@@ -1,3 +1,4 @@
+# path: .github/workflows/ultimate-pipeline.yml
 name: Ultimate Deploy, Scan & Notify (Pro Edition, Error-Proof)
 
 on:
