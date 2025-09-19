@@ -1,381 +1,343 @@
-Ultimate GitHub Actions pipeline — Production-ready, Error-Proof, Automated
-
-File: .github/workflows/ultimate-pipeline.yml
-
-Single combined workflow that covers:
-
-- Preflight checks
-
-- Cross-platform quality & security (matrix)
-
-- Build, scan, test, coverage, artifact publishing
-
-- Conditional deploy (Firebase / GCP Workload Identity)
-
-- Notify (FCM) with robust auth and retries
-
-- Release asset upload
-
-- Lightweight scheduled/quick scan job
-
-
-
-Design goals: deterministic, idempotent, failure-transparent, secure (secrets optional),
-
-performant (caching), minimal runner-time, strong logging + artifacts for debugging.
-
 name: Ultimate Deploy, Scan & Notify (Pro Edition, Error-Proof)
 
-on: push: branches: [ main ] workflow_dispatch: schedule: - cron: "0 * * * *"      # hourly full preflight + CI - cron: '0 */6 * * *'     # every 6 hours quick scan release: types: [created]
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: {}
+  schedule:
+    - cron: '0 * * * *'     # hourly full
+    - cron: '0 */6 * * *'   # every 6 hours quick scan
+  release:
+    types: [created]
 
-concurrency: group: ${{ github.workflow }}-${{ github.ref }} cancel-in-progress: true
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
-permissions: contents: read id-token: write
+permissions:
+  contents: read
+  id-token: write
 
-env: STRICT: "true" TCP_TIMEOUT: "3.0" HTTP_TIMEOUT: "5.0" DOWNLOAD_TIMEOUT: "8.0" CONNECTION_TIMEOUT: "4.0" PYTHONUNBUFFERED: "1"
+env:
+  STRICT: "true"
+  TCP_TIMEOUT: "3.0"
+  HTTP_TIMEOUT: "5.0"
+  DOWNLOAD_TIMEOUT: "8.0"
+  CONNECTION_TIMEOUT: "4.0"
+  PYTHONUNBUFFERED: "1"
 
-defaults: run: shell: bash working-directory: ${{ github.workspace }}
+defaults:
+  run:
+    shell: bash
 
-#############################
+jobs:
+  preflight:
+    name: Preflight: check required files & secrets
+    runs-on: ubuntu-latest
+    outputs:
+      ok: ${{ steps.check.outputs.ok }}
+      deploy_ready: ${{ steps.check.outputs.deploy_ready }}
+    steps:
+      - uses: actions/checkout@v4
 
-Helper reusable steps
+      - id: check
+        name: Verify required files & deploy secrets
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+          GCP_WID: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+        run: |
+          set -euo pipefail
+          missing=()
+          required_files=(
+            scripts/deploy_firebase.sh
+            scripts/verify_output.py
+            src/fetcher.py
+            src/xray_tester.py
+            src/hiddify_tester.py
+            src/filter.py
+            src/reporter.py
+            requirements.txt
+          )
+          for f in "${required_files[@]}"; do
+            if [ ! -f "$f" ]; then
+              echo "::notice::Missing $f"
+              missing+=("$f")
+            fi
+          done
 
-#############################
+          if (( ${#missing[@]} > 0 )); then
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "deploy_ready=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
 
-NOTE: keep helper scripts small and idempotent. They should live in scripts/ for easier testing.
+          deploy_ready=false
+          if [ -n "${FIREBASE_TOKEN:-}" ] || [ -n "${GCP_WID:-}" ]; then
+            deploy_ready=true
+          fi
 
-jobs: ########################################################
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+          echo "deploy_ready=${deploy_ready}" >> "$GITHUB_OUTPUT"
 
-0) Preflight
+  quality_and_security:
+    name: Cross-Platform Quality & Security
+    needs: preflight
+    if: needs.preflight.outputs.ok == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
 
-######################################################## preflight: name: Preflight: required files, secrets & env runs-on: ubuntu-latest outputs: ok: ${{ steps.check.outputs.ok }} deploy_ready: ${{ steps.check.outputs.deploy_ready }} timeout-minutes: 10 steps: - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
 
-- id: check
-    name: Verify required files & deploy secrets
-    run: |
-      set -euo pipefail
-      missing=()
-      required_files=(
-        scripts/deploy_firebase.sh
-        scripts/verify_output.py
-        src/fetcher.py
-        src/xray_tester.py
-        src/hiddify_tester.py
-        src/filter.py
-        src/reporter.py
-        requirements.txt
-      )
-      for f in "${required_files[@]}"; do
-        if [ ! -f "$f" ]; then
-          echo "::notice::Missing $f"
-          missing+=("$f")
-        fi
-      done
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
 
-      if (( ${#missing[@]} > 0 )); then
-        echo "::error::One or more required files missing: ${missing[*]}"
-        echo "ok=false" >> "$GITHUB_OUTPUT"
-        echo "deploy_ready=false" >> "$GITHUB_OUTPUT"
-        exit 1
-      fi
+      - name: Install dev & test tools
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then python -m pip install -r requirements.txt || true; fi
+          python -m pip install --no-cache-dir flake8 bandit pip-audit pytest coverage ruff black isort autoflake || true
 
-      deploy_ready=false
-      if [ -n "${{ secrets.FIREBASE_TOKEN || '' }}" ] || [ -n "${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER || '' }}" ]; then
-        deploy_ready=true
-      fi
+      - name: Auto-fix Python (safe)
+        run: |
+          set -euo pipefail
+          ruff check --fix . || true
+          isort . || true
+          files=$(git ls-files -- '*.py' || true)
+          if [ -n "$files" ]; then
+            printf "%s\n" $files | xargs --no-run-if-empty autoflake --in-place --remove-unused-variables --remove-all-unused-imports || true
+          fi
+          black . || true
 
-      echo "ok=true" >> "$GITHUB_OUTPUT"
-      echo "deploy_ready=${deploy_ready}" >> "$GITHUB_OUTPUT"
+      - name: Lint (flake8 strict)
+        run: |
+          set -euo pipefail
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
 
-########################################################
+      - name: Security scan (bandit)
+        run: |
+          set -euo pipefail
+          bandit -r . -ll -ii || true
 
-1) Quality & Security (matrix)
+      - name: Dependency audit (pip-audit)
+        run: |
+          set -euo pipefail
+          pip-audit --progress spinner || true
 
-######################################################## quality_and_security: name: Cross-Platform Quality & Security needs: preflight if: needs.preflight.outputs.ok == 'true' strategy: fail-fast: false matrix: os: [ubuntu-latest, macos-latest] runs-on: ${{ matrix.os }} timeout-minutes: 45 steps: - uses: actions/checkout@v4
+      - name: Run tests + coverage
+        id: run_tests
+        run: |
+          set -euo pipefail
+          pytest --maxfail=1 --disable-warnings --cov=src --cov-report=xml || true
+          if [ -f coverage.xml ]; then echo "coverage_exists=true" >> "$GITHUB_OUTPUT"; fi
 
-- uses: actions/setup-python@v4
-    with:
-      python-version: '3.10'
+      - name: Upload coverage (Codecov)
+        if: steps.run_tests.outputs.coverage_exists == 'true' && secrets.CODECOV_TOKEN != ''
+        uses: codecov/codecov-action@v3
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
+          flags: ${{ matrix.os }}
+          fail_ci_if_error: true
 
-  - name: Cache pip
-    uses: actions/cache@v4
-    with:
-      path: |
-        ~/.cache/pip
-        ~/.cache/pypoetry
-      key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-      restore-keys: |
-        ${{ runner.os }}-pip-
-
-  - name: Install dev & test tools (deterministic)
-    run: |
-      set -euo pipefail
-      python -m pip install --upgrade pip
-      if [ -f requirements.txt ]; then python -m pip install -r requirements.txt || true; fi
-      python -m pip install --no-cache-dir flake8 bandit pip-audit pytest coverage ruff black isort autoflake || true
-
-  - name: Auto-fix Python (safe, non-destructive)
-    run: |
-      set -euo pipefail
-      ruff check --fix . || true
-      isort . || true
-      files=$(git ls-files -- '*.py' || true)
-      if [ -n "$files" ]; then
-        printf "%s
-
-" $files | xargs --no-run-if-empty autoflake --in-place --remove-unused-variables --remove-all-unused-imports || true fi black . || true
-
-- name: Lint (flake8 strict)
-    run: |
-      set -euo pipefail
-      # Only fail on syntax/critical errors; developers can fix style locally
-      flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-
-  - name: Security scan (bandit)
-    run: |
-      set -euo pipefail
-      bandit -r . -ll -ii || true
-
-  - name: Dependency audit (pip-audit)
-    run: |
-      set -euo pipefail
-      pip-audit --progress spinner || true
-
-  - name: Run tests + coverage
-    id: run_tests
-    run: |
-      set -euo pipefail
-      pytest --maxfail=1 --disable-warnings --cov=src --cov-report=xml || true
-      if [ -f coverage.xml ]; then echo "coverage_exists=true" >> "$GITHUB_OUTPUT"; fi
-
-  - name: Upload coverage to Codecov (when token present)
-    if: steps.run_tests.outputs.coverage_exists == 'true' && secrets.CODECOV_TOKEN != ''
-    uses: codecov/codecov-action@v4
-    with:
-      token: ${{ secrets.CODECOV_TOKEN }}
-      files: ./coverage.xml
-      flags: ${{ matrix.os }}
-      fail_ci_if_error: true
-
-########################################################
-
-2) Build & Scan (single linux runner)
-
-######################################################## build_and_scan: name: Build, Scan & Verify needs: [preflight, quality_and_security] if: needs.preflight.outputs.ok == 'true' runs-on: ubuntu-latest timeout-minutes: 40 outputs: proxy_count: ${{ steps.count.outputs.count }} env: PYTHONPATH: src PYTHONUNBUFFERED: "1" steps: - uses: actions/checkout@v4
-
-- uses: actions/setup-python@v4
-    with:
-      python-version: '3.10'
-
-  - name: Cache Python dependencies
-    uses: actions/cache@v4
-    with:
-      path: ~/.cache/pip
-      key: ubuntu-latest-pip-${{ hashFiles('**/requirements.txt') }}
-
-  - name: Install runtime deps
-    run: |
-      set -euo pipefail
-      if [ -f requirements.txt ]; then python -m pip install --upgrade pip; pip install -r requirements.txt; fi
-
-  - name: Optional installer (install.py)
-    run: |
-      set -euo pipefail
-      if [ -f install.py ]; then python install.py || true; fi
-
-  - name: Run scan pipeline (fetcher/testers/filter/reporter)
-    run: |
-      set -euo pipefail
-      # Fail-fast for critical pipeline components so artifacts are preserved for debugging
-      python -m src.fetcher || { echo "::error::fetcher failed"; exit 1; }
-      python -m src.xray_tester || { echo "::error::xray_tester failed"; exit 1; }
-      python -m src.hiddify_tester || { echo "::error::hiddify_tester failed"; exit 1; }
-      python -m src.filter || { echo "::error::filter failed"; exit 1; }
-      python -m src.reporter || { echo "::error::reporter failed"; exit 1; }
-      chmod +x scripts/verify_output.py || true
-      python scripts/verify_output.py
-
-  - id: count
-    name: Count proxies
-    run: |
-      set -euo pipefail
-      cnt=0
-      if [ -f output/all.txt ]; then cnt=$(wc -l < output/all.txt | tr -d ' '); fi
-      echo "count=$cnt" >> "$GITHUB_OUTPUT"
-
-  - name: Upload scan results artifact
-    uses: actions/upload-artifact@v3
-    with:
-      name: scan-results
-      path: |
-        output/
-        logs/
-      retention-days: 7
-
-########################################################
-
-3) Deploy (Firebase) - conditional on deploy_ready
-
-######################################################## deploy: name: Deploy to Firebase needs: build_and_scan if: needs.preflight.outputs.deploy_ready == 'true' runs-on: ubuntu-latest timeout-minutes: 20 steps: - uses: actions/checkout@v4
-
-- name: Install firebase-tools (cached by npm)
-    run: |
-      set -euo pipefail
-      npm ci -g firebase-tools@latest || npm install -g firebase-tools@latest
-
-  - name: Deploy via script (firebase)
+  build_and_scan:
+    name: Build, Scan & Verify
+    needs: [preflight, quality_and_security]
+    if: needs.preflight.outputs.ok == 'true'
+    runs-on: ubuntu-latest
     env:
-      FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
-      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-    run: |
-      set -euo pipefail
-      chmod +x scripts/deploy_firebase.sh || true
-      if [ -n "${FIREBASE_TOKEN:-}" ]; then
-        ./scripts/deploy_firebase.sh --token "$FIREBASE_TOKEN" --project "${GCP_PROJECT_ID:-}" || { echo "::error::Firebase deploy failed"; exit 1; }
-      else
-        ./scripts/deploy_firebase.sh || { echo "::error::Firebase deploy failed (no FIREBASE_TOKEN)"; exit 1; }
-      fi
+      PYTHONPATH: src
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
 
-########################################################
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
 
-4) Notify (FCM) - conditional on deploy_ready
+      - name: Cache Python dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ubuntu-latest-pip-${{ hashFiles('**/requirements.txt') }}
 
-######################################################## notify: name: Notify Users (FCM) needs: [build_and_scan, deploy] if: needs.preflight.outputs.deploy_ready == 'true' runs-on: ubuntu-latest timeout-minutes: 10 env: PROXY_COUNT: ${{ needs.build_and_scan.outputs.proxy_count }} steps: - uses: actions/checkout@v4
+      - name: Install runtime deps
+        run: |
+          set -euo pipefail
+          if [ -f requirements.txt ]; then python -m pip install --upgrade pip; pip install -r requirements.txt; fi
 
-- name: Setup gcloud (workload identity)
-    uses: google-github-actions/setup-gcloud@v1
-    with:
-      project_id: ${{ secrets.GCP_PROJECT_ID }}
+      - name: Optional installer (install.py)
+        run: |
+          set -euo pipefail
+          if [ -f install.py ]; then python install.py || true; fi
 
-  - name: Authenticate to GCP via Workload Identity
-    uses: google-github-actions/auth@v2
-    with:
-      workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-      service_account_email: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
+      - name: Run scan pipeline (fetcher/testers/filter/reporter)
+        run: |
+          set -euo pipefail
+          python -m src.fetcher || { echo "::error::fetcher failed"; exit 1; }
+          python -m src.xray_tester || { echo "::error::xray_tester failed"; exit 1; }
+          python -m src.hiddify_tester || { echo "::error::hiddify_tester failed"; exit 1; }
+          python -m src.filter || { echo "::error::filter failed"; exit 1; }
+          python -m src.reporter || { echo "::error::reporter failed"; exit 1; }
+          chmod +x scripts/verify_output.py || true
+          python scripts/verify_output.py
 
-  - id: token
-    name: Get access token
-    run: |
-      set -euo pipefail
-      access_token=$(gcloud auth print-access-token) || { echo "::error::Unable to obtain access token"; exit 1; }
-      echo "access_token=${access_token}" >> "$GITHUB_OUTPUT"
+      - id: count
+        name: Count proxies
+        run: |
+          set -euo pipefail
+          cnt=0
+          if [ -f output/all.txt ]; then cnt=$(wc -l < output/all.txt | tr -d ' '); fi
+          echo "count=$cnt" >> "$GITHUB_OUTPUT"
 
-  - name: Prepare payload and send FCM message (retries)
+      - uses: actions/upload-artifact@v3
+        with:
+          name: scan-results
+          path: |
+            output/
+            logs/
+          retention-days: 7
+
+  deploy:
+    name: Deploy to Firebase
+    needs: build_and_scan
+    if: needs.preflight.outputs.deploy_ready == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install firebase-tools
+        run: |
+          set -euo pipefail
+          npm ci -g firebase-tools@latest || npm install -g firebase-tools@latest
+
+      - name: Deploy via script (firebase)
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          chmod +x scripts/deploy_firebase.sh || true
+          if [ -n "${FIREBASE_TOKEN:-}" ]; then
+            ./scripts/deploy_firebase.sh --token "$FIREBASE_TOKEN" --project "${GCP_PROJECT_ID:-}" || { echo "::error::Firebase deploy failed"; exit 1; }
+          else
+            ./scripts/deploy_firebase.sh || { echo "::error::Firebase deploy failed (no FIREBASE_TOKEN)"; exit 1; }
+          fi
+
+  notify:
+    name: Notify Users (FCM)
+    needs: [build_and_scan, deploy]
+    if: needs.preflight.outputs.deploy_ready == 'true'
+    runs-on: ubuntu-latest
     env:
-      ACCESS_TOKEN: ${{ steps.token.outputs.access_token }}
-      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
       PROXY_COUNT: ${{ needs.build_and_scan.outputs.proxy_count }}
-    run: |
-      set -euo pipefail
-      TITLE="Proxies Updated"
-      BODY="${PROXY_COUNT} new proxies are available!"
+    steps:
+      - uses: actions/checkout@v4
 
-      python - <<'PY' > payload.json
-      import json, time, os
-      payload = {
-        "message": {
-          "topic": "news",
-          "notification": {"title": os.getenv('TITLE','Proxies Updated'), "body": os.getenv('BODY','')},
-          "data": {"update_type":"proxy_list","proxy_count":str(os.getenv('PROXY_COUNT','0')),'timestamp':str(int(time.time()))}
-        }
-      }
-      print(json.dumps(payload))
-      PY
+      - name: Setup gcloud (workload-identity)
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
 
-      for i in 1 2 3; do
-        curl -sS -X POST "https://fcm.googleapis.com/v1/projects/${GCP_PROJECT_ID}/messages:send" \
-          -H "Authorization: Bearer ${ACCESS_TOKEN}" \
-          -H "Content-Type: application/json" \
-          --data-binary @payload.json && break || echo "FCM send attempt $i failed";
-        sleep $((i * 2))
-      done
+      - name: Authenticate to GCP via Workload Identity
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account_email: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
 
-########################################################
+      - id: token
+        name: Get access token
+        run: |
+          set -euo pipefail
+          access_token=$(gcloud auth print-access-token) || { echo "::error::Unable to obtain access token"; exit 1; }
+          echo "access_token=${access_token}" >> "$GITHUB_OUTPUT"
 
-5) Upload release assets
+      - name: Prepare payload and send FCM message
+        env:
+          ACCESS_TOKEN: ${{ steps.token.outputs.access_token }}
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          PROXY_COUNT: ${{ needs.build_and_scan.outputs.proxy_count }}
+        run: |
+          set -euo pipefail
+          TITLE="Proxies Updated"
+          BODY="${PROXY_COUNT} new proxies are available!"
+          python - <<'PY' > payload.json
+import json, time, os
+payload = {
+  "message": {
+    "topic": "news",
+    "notification": {"title": os.getenv("TITLE","Proxies Updated"), "body": os.getenv("BODY","")},
+    "data": {"update_type":"proxy_list","proxy_count":str(os.getenv("PROXY_COUNT","0")),"timestamp":str(int(time.time()))}
+  }
+}
+print(json.dumps(payload))
+PY
+          curl -sS -X POST "https://fcm.googleapis.com/v1/projects/${GCP_PROJECT_ID}/messages:send" \
+            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data-binary @payload.json
 
-######################################################## upload_release_assets: name: Upload Release Assets needs: build_and_scan if: github.event_name == 'release' runs-on: ubuntu-latest timeout-minutes: 5 steps: - name: Download scan results uses: actions/download-artifact@v3 with: name: scan-results path: output
+  upload_release_assets:
+    name: Upload Release Assets
+    needs: build_and_scan
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download scan results
+        uses: actions/download-artifact@v3
+        with:
+          name: scan-results
+          path: output
 
-- name: Verify presence of output files
-    run: |
-      set -euo pipefail
-      if [ ! -f output/all.txt ]; then echo "::error::Missing output/all.txt"; exit 1; fi
+      - name: Verify presence of output files
+        run: |
+          set -euo pipefail
+          if [ ! -f output/all.txt ]; then echo "::error::Missing output/all.txt"; exit 1; fi
 
-  - name: Create release and upload files
-    uses: softprops/action-gh-release@v1
-    with:
-      files: |
-        output/all.txt
-        output/base64_all.txt
+      - name: Upload files to release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            output/all.txt
+            output/base64_all.txt
 
-########################################################
+  scheduled_quick_scan:
+    name: Quick Scheduled Scan
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-6) Lightweight scheduled quick scan (6-hour cron)
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          cache: 'pip'
 
-######################################################## scheduled_quick_scan: name: Quick Scheduled Scan if: github.event_name == 'schedule' runs-on: ubuntu-latest timeout-minutes: 20 steps: - uses: actions/checkout@v4
+      - name: Run installer (if present)
+        run: |
+          set -euo pipefail
+          if [ -f install.py ]; then python install.py || true; fi
 
-- uses: actions/setup-python@v4
-    with:
-      python-version: '3.10'
-      cache: 'pip'
+      - name: Run scanner (quick)
+        run: |
+          set -euo pipefail
+          python -m src.main || true
 
-  - name: Run installer (if present)
-    run: |
-      set -euo pipefail
-      if [ -f install.py ]; then python install.py || true; fi
-
-  - name: Run scanner (quick)
-    run: |
-      set -euo pipefail
-      python -m src.main || true
-
-  - name: Commit Results (best-effort)
-    run: |
-      git config --global user.name 'github-actions[bot]'
-      git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-      git add output/
-      git diff --staged --quiet || git commit -m "Scheduled: Update proxy subscription and report"
-      git push || echo "Push failed or repository is read-only"
-
-End of workflow
-
------------------
-
-Key improvements in this version:
-
-- Single, production-ready combined workflow that still preserves conditional deploy/notify paths.
-
-- Stronger preflight checks and clearer failures.
-
-- Deterministic dependency installation with caches and timeouts.
-
-- Auto-fix step is safe and non-blocking; lint/test/security steps surface critical issues.
-
-- Artifacts and logs are retained for debugging when jobs fail.
-
-- Retries on external network interactions (FCM).
-
-- Configurable: if you don't set deploy secrets, deploy/notify are skipped automatically.
-
-
-
-Next recommended actions (apply before merging):
-
-1) Add these secrets in GitHub: FIREBASE_TOKEN, GCP_WORKLOAD_IDENTITY_PROVIDER, GCP_SERVICE_ACCOUNT_EMAIL, GCP_PROJECT_ID, CODECOV_TOKEN (optional).
-
-2) Ensure scripts/ and src/ exist and are tested locally (run python -m pytest and scripts manually).
-
-3) If Windows or macOS runners cause tool incompatibilities, reduce the matrix to ubuntu-latest or add conditional steps.
-
-4) If you prefer separate workflows for CI vs scheduled scans vs release, I can split this file into smaller ones.
-
-If you want more automation:
-
-- Add signed commits / GPG verification for release assets
-
-- Add SBOM generation step (cyclonedx-py) and push to artifact storage
-
-- Add GitHub comments/PR checks with annotations using the "github/codeql-action" or "danger-js"
-
-Tell me which of these you want and I'll apply them directly to this workflow file.
-
+      - name: Commit Results (best-effort)
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add output/
+          git diff --staged --quiet || git commit -m "Scheduled: Update proxy subscription and report"
+          git push || echo "Push failed (repo may be read-only)"
