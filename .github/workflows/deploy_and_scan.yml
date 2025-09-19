@@ -1,9 +1,11 @@
-name: "Ultimate Deploy, Scan, and Notify (Error-Proof, Pro Edition)"
+name: "Ultimate Deploy, Scan & Notify (Pro Edition, Error-Proof)"
 
 on:
   push:
     branches: [ main ]
-  workflow_dispatch: {}
+  workflow_dispatch:
+  schedule:
+    - cron: "0 * * * *"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -14,145 +16,101 @@ permissions:
   id-token: write
 
 env:
+  STRICT: "true"
   TCP_TIMEOUT: "3.0"
   HTTP_TIMEOUT: "5.0"
   DOWNLOAD_TIMEOUT: "8.0"
   CONNECTION_TIMEOUT: "4.0"
-  STRICT: "true"
 
 jobs:
-  ################################################################
-  # 0) Preflight: check required files and secrets (fail if missing)
-  ################################################################
+  ########################################################
+  # 0) Preflight
+  ########################################################
   preflight:
-    name: "Preflight validations (Fails if any critical error)"
+    name: "Preflight checks"
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: bash
     outputs:
       ok: ${{ steps.check.outputs.ok }}
       deploy_ready: ${{ steps.check.outputs.deploy_ready }}
     steps:
-      - name: "Checkout repository"
-        uses: actions/checkout@v3
-
-      - name: "Ensure required scripts/files and detect deployment credentials (Fatal if missing)"
-        id: check
-        env:
-          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
-          GCP_WI_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+      - uses: actions/checkout@v3
+      - id: check
         run: |
           set -euo pipefail
           missing=()
-          fatal_missing=()
           for f in scripts/deploy_firebase.sh src/fetcher.py src/xray_tester.py src/hiddify_tester.py src/filter.py src/reporter.py scripts/verify_output.py requirements.txt; do
-            if [ ! -e "$f" ]; then
-              echo "::error::Critical file not found: $f"
-              fatal_missing+=("$f")
+            if [ ! -f "$f" ]; then
+              echo "::error::Missing $f"
+              missing+=("$f")
             fi
           done
-          if (( ${#fatal_missing[@]} > 0 )); then
-            echo "::error::Workflow stopped due to missing files: ${fatal_missing[*]}"
+          if (( ${#missing[@]} > 0 )); then
             echo "ok=false" >> $GITHUB_OUTPUT
             exit 1
           fi
-
           deploy_ready=false
-          if [ -n "${FIREBASE_TOKEN:-}" ] || [ -n "${GCP_WI_PROVIDER:-}" ]; then
+          if [ -n "${{ secrets.FIREBASE_TOKEN }}" ] || [ -n "${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}" ]; then
             deploy_ready=true
-          else
-            echo "::warning::No deployment credential found. Deploy/notify jobs will be skipped."
           fi
-
-          if [ -z "${CODECOV_TOKEN:-}" ]; then
-            echo "::warning::CODECOV_TOKEN is not set. Codecov upload will be skipped for private repos."
-          fi
-
           echo "ok=true" >> $GITHUB_OUTPUT
           echo "deploy_ready=${deploy_ready}" >> $GITHUB_OUTPUT
 
-  ################################################################
-  # 1) Quality & Security (CI matrix, strict error handling)
-  ################################################################
-  quality_and_security_shield:
-    name: "Cross-Platform Quality & Security Shield (Error-proof)"
+  ########################################################
+  # 1) Quality & Security
+  ########################################################
+  quality_and_security:
+    name: "Cross-Platform Quality & Security"
     needs: preflight
     if: needs.preflight.outputs.ok == 'true'
-    runs-on: ${{ matrix.os }}
-    defaults:
-      run:
-        shell: bash
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
-
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
-      - name: "Checkout code"
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-      - name: "Set up Python"
-        uses: actions/setup-python@v4
+      - uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
-      - name: "Cache pip"
-        uses: actions/cache@v3
+      - uses: actions/cache@v3
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
 
-      - name: "Install requirements (fail if missing)"
+      - name: "Install dev & test tools"
         run: |
-          set -euo pipefail
-          if [ -f requirements.txt ]; then
-            python -m pip install --upgrade pip
-            python -m pip install -r requirements.txt
-          else
-            echo "::error::requirements.txt not found, aborting."
-            exit 1
-          fi
-
-      - name: "Install dev tools (lint/test/security)"
-        run: |
-          set -euo pipefail
           python -m pip install --upgrade pip
-          python -m pip install flake8 bandit pip-audit pytest coverage
+          pip install flake8 bandit pip-audit pytest coverage ruff black isort autoflake
 
-      - name: "Lint (flake8) - strict"
-        env:
-          STRICT: ${{ env.STRICT }}
+      - name: "Auto-fix Python code"
         run: |
           set -euo pipefail
-          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+          ruff check --fix . || true
+          isort . || true
+          autoflake --in-place --remove-unused-variables --remove-all-unused-imports $(git ls-files '*.py') || true
+          black . || true
 
-      - name: "Security scan: bandit"
-        run: |
-          set -euo pipefail
-          bandit -r . -ll -ii
+      - name: "Lint (flake8 strict)"
+        run: flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
 
-      - name: "Dependency scan: pip-audit"
-        run: |
-          set -euo pipefail
-          pip-audit
+      - name: "Security scan (bandit)"
+        run: bandit -r . -ll -ii
 
-      - name: "Run tests + collect coverage (fail if test fails)"
+      - name: "Dependency audit (pip-audit)"
+        run: pip-audit
+
+      - name: "Run tests + coverage"
         id: run_tests
         run: |
-          set -euo pipefail
-          coverage_exists=false
-          python -m pytest --cov=src --cov-report=xml
+          pytest --cov=src --cov-report=xml
           if [ -f coverage.xml ]; then
-            coverage_exists=true
+            echo "coverage_exists=true" >> $GITHUB_OUTPUT
           fi
-          echo "coverage_exists=${coverage_exists}" >> $GITHUB_OUTPUT
 
-      - name: "Upload coverage to Codecov (only when coverage exists and token present)"
-        if: ${{ steps.run_tests.outputs.coverage_exists == 'true' && secrets.CODECOV_TOKEN != '' }}
+      - name: "Upload coverage (Codecov)"
+        if: steps.run_tests.outputs.coverage_exists == 'true' && secrets.CODECOV_TOKEN != ''
         uses: codecov/codecov-action@v3
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -160,107 +118,43 @@ jobs:
           flags: ${{ matrix.os }}
           fail_ci_if_error: true
 
-  ################################################################
-  # 2) Build & Scan (fetch → test → filter → report, error-proof)
-  ################################################################
+  ########################################################
+  # 2) Build & Scan
+  ########################################################
   build_and_scan:
-    name: "Build and Scan (Error-proof)"
-    needs: [preflight, quality_and_security_shield]
+    name: "Build & Scan"
+    needs: [preflight, quality_and_security]
     if: needs.preflight.outputs.ok == 'true'
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: bash
-    timeout-minutes: 40
     outputs:
-      proxy_count: ${{ steps.count_proxies.outputs.count }}
+      proxy_count: ${{ steps.count.outputs.count }}
     env:
       PYTHONPATH: src
-
     steps:
-      - name: "Checkout"
-        uses: actions/checkout@v3
-
-      - name: "Setup Python"
-        uses: actions/setup-python@v4
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
-      - name: "Restore pip cache"
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/pip
-          key: ubuntu-latest-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ubuntu-latest-pip-
+      - run: pip install -r requirements.txt
 
-      - name: "Install dependencies (fail if missing)"
+      - run: python install.py || echo "No install.py"
+
+      - run: python -m src.fetcher
+      - run: python -m src.xray_tester
+      - run: python -m src.hiddify_tester
+      - run: python -m src.filter
+      - run: python -m src.reporter
+      - run: python scripts/verify_output.py
+
+      - id: count
         run: |
-          set -euo pipefail
-          if [ -f requirements.txt ]; then python -m pip install -r requirements.txt; else echo "::error::requirements.txt missing"; exit 1; fi
-
-      - name: "Install application components (cores) if needed"
-        id: install_cores
-        run: |
-          set -euo pipefail
-          if [ -f install.py ]; then
-            python install.py
-          else
-            echo "install.py not present - skipping cores install"
-          fi
-
-      - name: "1. Fetch Subscription Sources (Fatal if missing)"
-        run: |
-          set -euo pipefail
-          python3 -m src.fetcher
-
-      - name: "2. Test Proxies (Xray)"
-        run: |
-          set -euo pipefail
-          python3 -m src.xray_tester
-
-      - name: "3. Test Proxies (Hiddify)"
-        run: |
-          set -euo pipefail
-          python3 -m src.hiddify_tester
-
-      - name: "4. Filter and Generate Lists"
-        run: |
-          set -euo pipefail
-          python3 -m src.filter
-
-      - name: "5. Generate Final Reports"
-        run: |
-          set -euo pipefail
-          python3 -m src.reporter
-
-      - name: "6. Self-Verification Gate"
-        run: |
-          set -euo pipefail
-          python3 scripts/verify_output.py
-
-      - name: "Count Proxies (always runs)"
-        id: count_proxies
-        if: always()
-        run: |
-          set -euo pipefail
           cnt=0
-          if [ -f output/all.txt ]; then
-            cnt=$(wc -l < output/all.txt | tr -d ' ')
-          fi
-          echo "Found $cnt proxies."
+          if [ -f output/all.txt ]; then cnt=$(wc -l < output/all.txt | tr -d ' '); fi
           echo "count=$cnt" >> $GITHUB_OUTPUT
 
-      - name: "Ensure artifact dirs exist (avoid upload failure)"
+      - uses: actions/upload-artifact@v3
         if: always()
-        run: |
-          set -euo pipefail
-          mkdir -p output logs
-          if [ ! -f output/.placeholder ]; then touch output/.placeholder; fi
-
-      - name: "Upload scan results and logs"
-        if: always()
-        uses: actions/upload-artifact@v3
         with:
           name: scan-results
           path: |
@@ -268,109 +162,59 @@ jobs:
             logs/
           retention-days: 7
 
-  ################################################################
-  # 3) Deploy (Firebase) — runs only when deploy credentials present
-  ################################################################
+  ########################################################
+  # 3) Deploy
+  ########################################################
   deploy:
-    name: "Deploy to Firebase (Error-proof)"
+    name: "Deploy to Firebase"
     needs: build_and_scan
+    if: needs.preflight.outputs.deploy_ready == 'true'
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: bash
-    timeout-minutes: 20
-    if: needs.preflight.outputs.ok == 'true' && needs.preflight.outputs.deploy_ready == 'true'
     steps:
-      - name: "Checkout"
-        uses: actions/checkout@v3
-
-      - name: "Install Node & firebase-tools"
-        run: |
-          set -euo pipefail
-          if ! command -v firebase >/dev/null 2>&1; then
-            npm install -g firebase-tools
-          fi
-          firebase --version
-
-      - name: "Make deploy script executable"
-        run: |
-          set -euo pipefail
-          chmod +x scripts/deploy_firebase.sh
-
-      - name: "Deploy to Firebase (using FIREBASE_TOKEN)"
+      - uses: actions/checkout@v3
+      - run: npm install -g firebase-tools
+      - run: chmod +x scripts/deploy_firebase.sh
+      - run: ./scripts/deploy_firebase.sh
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
           GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-        run: |
-          set -euo pipefail
-          if [ -n "${FIREBASE_TOKEN:-}" ]; then
-            echo "Using FIREBASE_TOKEN to deploy."
-            ./scripts/deploy_firebase.sh
-          else
-            echo "::error::FIREBASE_TOKEN is not provided. To deploy without a token, configure Workload Identity (OIDC) and update this job."
-            exit 1
-          fi
 
-  ################################################################
-  # 4) Notify Users (FCM) — uses OIDC / Workload Identity (only if present)
-  ################################################################
-  notify_users:
-    name: "Notify Users (FCM, Error-proof)"
+  ########################################################
+  # 4) Notify
+  ########################################################
+  notify:
+    name: "Notify Users"
     needs: [deploy, build_and_scan]
+    if: needs.preflight.outputs.deploy_ready == 'true'
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: bash
-    timeout-minutes: 5
-    if: needs.preflight.outputs.ok == 'true' && needs.preflight.outputs.deploy_ready == 'true'
     steps:
-      - name: "Checkout"
-        uses: actions/checkout@v3
-
-      - name: "Install gcloud CLI"
-        uses: google-github-actions/setup-gcloud@v1
+      - uses: actions/checkout@v3
+      - uses: google-github-actions/setup-gcloud@v1
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
-
-      - name: "Authenticate using Workload Identity"
-        uses: google-github-actions/auth@v2
+      - uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account_email: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
-
-      - name: "Get access token"
-        id: get_token
-        run: |
-          set -euo pipefail
-          ACCESS_TOKEN=$(gcloud auth print-access-token)
-          echo "access_token=${ACCESS_TOKEN}" >> $GITHUB_OUTPUT
-
-      - name: "Send FCM notification (data-driven)"
-        env:
-          PROXY_COUNT: ${{ needs.build_and_scan.outputs.proxy_count }}
-          ACCESS_TOKEN: ${{ steps.get_token.outputs.access_token }}
-          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-        run: |
-          set -euo pipefail
+      - id: token
+        run: echo "access_token=$(gcloud auth print-access-token)" >> $GITHUB_OUTPUT
+      - run: |
           TITLE="Proxies Updated"
-          BODY="${PROXY_COUNT} new proxies are available!"
-          cat > /tmp/fcm_payload.json <<'EOF'
+          BODY="${{ needs.build_and_scan.outputs.proxy_count }} new proxies are available!"
+          cat > payload.json <<EOF
           {
             "message": {
               "topic": "news",
-              "notification": {
-                "title": "'"${TITLE}"'",
-                "body": "'"${BODY}"'"
-              },
+              "notification": {"title": "$TITLE", "body": "$BODY"},
               "data": {
                 "update_type": "proxy_list",
-                "proxy_count": "'"${PROXY_COUNT}"'",
-                "timestamp": "'"$(date +%s)"'"
+                "proxy_count": "${{ needs.build_and_scan.outputs.proxy_count }}",
+                "timestamp": "$(date +%s)"
               }
             }
           }
           EOF
-          curl -sS -X POST "https://fcm.googleapis.com/v1/projects/${GCP_PROJECT_ID}/messages:send" \
-            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+          curl -sS -X POST "https://fcm.googleapis.com/v1/projects/${{ secrets.GCP_PROJECT_ID }}/messages:send" \
+            -H "Authorization: Bearer ${{ steps.token.outputs.access_token }}" \
             -H "Content-Type: application/json" \
-            -d @/tmp/fcm_payload.json
+            -d @payload.json
