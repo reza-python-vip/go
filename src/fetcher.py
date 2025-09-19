@@ -63,3 +63,16 @@ class SubscriptionFetcher:
         final_configs = list(all_configs)
         logger.info(f"Total unique configurations fetched: {len(final_configs)}")
         return final_configs
+
+
+async def fetch_subscription_links(sources: list[str] | None = None, timeout: float = 10.0) -> list[str]:
+    """Convenience wrapper used by other modules to fetch subscription links.
+
+    Args:
+        sources: Optional list of sources. If None, callers should provide `config.SUBSCRIPTION_SOURCES`.
+    """
+    from .config import config
+
+    sources = sources or config.SUBSCRIPTION_SOURCES
+    fetcher = SubscriptionFetcher(sources, timeout=timeout)
+    return await fetcher.fetch_all()

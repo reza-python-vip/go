@@ -28,7 +28,7 @@ def generate_report(
     # --- Report Header ---
     report_lines = [
         "# 🚀 Proxy Scan Report",
-        f"*Generated on: {datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC'')}*",
+        f"*Generated on: {datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}*",
         "",
         "## 📊 Summary",
         f"- **Total Nodes Tested:** {total_tested}",

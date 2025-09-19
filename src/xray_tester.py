@@ -12,7 +12,7 @@ import aiohttp
 
 from .config import Config
 from .models import Node, NodeMetrics
-from .parser import parse_v2ray_uri
+from .parsers import parse_v2ray_uri
 
 logger = logging.getLogger(__name__)
 

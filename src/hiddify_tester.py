@@ -1,9 +1,8 @@
 from __future__ import annotations
 
+
 import asyncio
-import json
 import logging
-import os
 from typing import Any, Dict
 
 import aiohttp
@@ -36,7 +35,7 @@ class HiddifyTester:
             "--experimental", "rpc-server",
             "--experimental-rpc-server-addr", f"127.0.0.1:{self.rpc_port}",
         ]
-        logger.info(f"Starting Hiddify-Core process on RPC port {self.rpc_port}")
+        logger.info("Starting Hiddify-Core process on RPC port %s", self.rpc_port)
         self.process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -96,16 +95,16 @@ class HiddifyTester:
                 if download_kbps > self.config.MIN_THROUGHPUT_KBPS:
                     throughput_kbps = download_kbps
                     success = True
-                    logger.debug(f"Node {node.remark} passed: Latency {latency_ms}ms, Speed {throughput_kbps:.2f} KB/s")
+                    logger.debug("Node %s passed: Latency %sms, Speed %.2f KB/s", node.remark, latency_ms, throughput_kbps)
                 else:
-                    logger.debug(f"Node {node.remark} failed speed test: {download_kbps:.2f} KB/s")
+                    logger.debug("Node %s failed speed test: %.2f KB/s", node.remark, download_kbps)
             else:
-                logger.debug(f"Node {node.remark} failed latency test: {latency_ms}ms")
+                logger.debug("Node %s failed latency test: %sms", node.remark, latency_ms)
 
         except (RuntimeError, aiohttp.ClientError) as e:
-            logger.warning(f"Test failed for node {node.remark}: {e}")
+            logger.warning("Test failed for node %s: %s", node.remark, e)
         except Exception as e:
-            logger.error(f"An unexpected error occurred testing {node.remark}: {e}", exc_info=True)
+            logger.error("An unexpected error occurred testing %s: %s", node.remark, e, exc_info=True)
         finally:
             self.port_manager.release_port(socks_port)
 

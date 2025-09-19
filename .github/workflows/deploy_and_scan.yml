@@ -301,21 +301,28 @@ jobs:
           set -euo pipefail
           TITLE="Proxies Updated"
           BODY="${PROXY_COUNT} new proxies are available!"
-          python - <<PY > payload.json
-import json, time, os
-payload = {
-  "message": {
-    "topic": "news",
-    "notification": {"title": os.getenv("TITLE", "Proxies Updated"), "body": os.getenv("BODY", "")},
-    "data": {
-      "update_type": "proxy_list",
-      "proxy_count": str(os.getenv("PROXY_COUNT", "0")),
-      "timestamp": str(int(time.time()))
-    }
-  }
-}
-print(json.dumps(payload))
-PY
+          python - <<'PY' > payload.json
+          import json
+          import time
+          import os
+
+          payload = {
+              "message": {
+                  "topic": "news",
+                  "notification": {
+                      "title": os.getenv("TITLE", "Proxies Updated"),
+                      "body": os.getenv("BODY", "")
+                  },
+                  "data": {
+                      "update_type": "proxy_list",
+                      "proxy_count": str(os.getenv("PROXY_COUNT", "0")),
+                      "timestamp": str(int(time.time()))
+                  }
+              }
+          }
+
+          print(json.dumps(payload))
+          PY
 
           curl -sS -X POST "https://fcm.googleapis.com/v1/projects/${GCP_PROJECT_ID}/messages:send" \
             -H "Authorization: Bearer ${ACCESS_TOKEN}" \

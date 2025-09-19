@@ -7,17 +7,23 @@ import sys
 from typing import List, Type
 
 import uvicorn
-from tqdm.asyncio import tqdm
+try:
+    from tqdm.asyncio import tqdm  # optional dependency
+except Exception:  # pragma: no cover - fallback when tqdm isn't installed
+    def tqdm(iterable, **kwargs):
+        """Fallback tqdm: returns the iterable unchanged when tqdm is not available."""
+        return iterable
 
 from .config import config
 from .fetcher import fetch_subscription_links
 from .filter import filter_and_rank
 from .health import app as health_app
 from .history import HistoryManager
-from .models import Node, NodeMetrics, NodeTester
+from .models import Node, NodeMetrics
+from .tester_base import NodeTester
 from .parsers import parse_links
 from .reporter import generate_report
-from .utils import PortManager, safe_write
+from .utils import safe_write
 from .xray_tester import XrayTester
 from .hiddify_tester import HiddifyTester
 

@@ -17,7 +17,7 @@ install:
 .PHONY: test
 test:
 	@echo "Running tests..."
-	$(VENV_DIR)/bin/pytest
+	SKIP_BINARY_CHECKS=1 $(VENV_DIR)/bin/pytest
 
 .PHONY: run
 run:

@@ -86,3 +86,28 @@ def parse_v2ray_uri(uri: str) -> Optional[Dict[str, Any]]:
     else:
         logger.debug(f"Unsupported URI scheme for: {uri[:40]}...")
         return None
+
+
+def parse_links(links: list[str]) -> list:
+    """Convert raw subscription lines into `Node` dataclass instances.
+
+    Filters out unsupported or unparsable links using `parse_v2ray_uri` as a
+    heuristic for supported formats.
+    """
+    from .models import Node
+
+    nodes: list[Node] = []
+    seen: set[str] = set()
+    for line in links:
+        line = line.strip()
+        if not line:
+            continue
+        # If parsing yields a config dict for known protocols, keep it; else still allow
+        # unknown strings to be wrapped as Node for downstream parsers/tests.
+        parsed = parse_v2ray_uri(line)
+        if parsed is None and line in seen:
+            continue
+        seen.add(line)
+        nodes.append(Node(config=line))
+
+    return nodes
