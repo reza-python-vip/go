@@ -1,101 +1,117 @@
-"""Node tester implementation using the Hiddify-Core binary.
-
-This module provides a concrete implementation of the NodeTester abstract base class,
-leveraging the Hiddify-Core command-line tool to perform network tests.
-"""
-
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
 import os
-import tempfile
-from typing import Optional
+from typing import Any, Dict
+
+import aiohttp
 
 from .config import Config
-from .network_metrics import Metrics
-from .tester_base import NodeTester
+from .models import Node, NodeMetrics
+from .utils import PortManager, get_open_port
+
+logger = logging.getLogger(__name__)
 
 
-class HiddifyTester(NodeTester):
-    """A NodeTester that uses the Hiddify-Core binary to test proxy nodes."""
+class HiddifyTester:
+    """A node tester utilizing the Hiddify-Core binary."""
 
-    def __init__(self, hiddify_binary_path: str, cache_dir: str, http_timeout: int):
-        self.binary_path = hiddify_binary_path
-        self.cache_dir = cache_dir
-        self.http_timeout = http_timeout
-        self.logger = logging.getLogger(self.__class__.__name__)
-
-    async def test_node(self, config_line: str) -> Optional[Metrics]:
-        """Tests a single proxy configuration using Hiddify-Core and returns its metrics."""
-        if not config_line:
-            return None
-
-        # Hiddify-Core expects the config via a temporary file
-        with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix=".json", dir=self.cache_dir) as tmp_config_file:
-            tmp_config_path = tmp_config_file.name
-            # The tool expects a JSON object with a 'proxies' list
-            json.dump({"proxies": [config_line]}, tmp_config_file)
-        
-        # Prepare the command to run
-        # The command syntax for Hiddify might be different; this is an assumed example.
-        # Example: hiddify-core -c <config_file> -t <timeout> --test-url <url>
-        cmd = [
-            self.binary_path,
-            "-c", tmp_config_path,
-            "-t", str(self.http_timeout),
-            "--test-url", "http://www.google.com/gen_204"  # A common URL for connectivity checks
-        ]
-        self.logger.debug(f"Executing command: {' '.join(cmd)}")
-
-        try:
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=self.http_timeout + 5)
-
-            if process.returncode != 0:
-                self.logger.error(f"Hiddify process exited with code {process.returncode}. Stderr: {stderr.decode(errors='ignore')}")
-                return None
-            
-            # Assuming Hiddify-Core outputs metrics in a JSON format to stdout
-            # This part needs to be adapted based on the actual output of the tool
-            try:
-                result = json.loads(stdout.decode())
-                # Example structure: {"latency": 120, "throughput": 5000, "loss": 0.1}
-                metrics = Metrics(
-                    latency_ms=result.get('latency'),
-                    jitter_ms=None,  # Hiddify might not provide this
-                    packet_loss=result.get('loss'),
-                    throughput_kbps=result.get('throughput'),
-                    success=True
-                )
-                return metrics
-            except json.JSONDecodeError:
-                self.logger.error("Failed to decode JSON from Hiddify output.")
-                return None
-
-        except asyncio.TimeoutError:
-            self.logger.warning(f"Test timed out for node: {config_line[:50]}...")
-            return None
-        except Exception as e:
-            self.logger.error(f"An unexpected error occurred while testing node: {e}")
-            return None
-        finally:
-            # Clean up the temporary config file
-            if os.path.exists(tmp_config_path):
-                os.remove(tmp_config_path)
+    def __init__(self, config: Config, port_manager: PortManager):
+        self.config = config
+        self.port_manager = port_manager
+        self.process = None
+        self.rpc_port = None
+        self.session = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=config.HTTP_TIMEOUT)
+        )
 
     async def __aenter__(self):
-        """Check for binary existence on entry."""
-        if not os.path.exists(self.binary_path) or not os.access(self.binary_path, os.X_OK):
-            raise FileNotFoundError(f"Hiddify binary not found or not executable at {self.binary_path}")
-        self.logger.info("HiddifyTester initialized and binary found.")
+        self.rpc_port = get_open_port()
+        cmd = [
+            str(self.config.HIDDIFY_BINARY),
+            "run",
+            "--config", "memory:{\"log\":{\"level\":\"warn\"}}",
+            "--experimental", "rpc-server",
+            "--experimental-rpc-server-addr", f"127.0.0.1:{self.rpc_port}",
+        ]
+        logger.info(f"Starting Hiddify-Core process on RPC port {self.rpc_port}")
+        self.process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await asyncio.sleep(1) # Give it a moment to start up
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Cleanup resources on exit."""
-        self.logger.info("HiddifyTester shutting down.")
+        if self.process and self.process.returncode is None:
+            logger.info("Terminating Hiddify-Core process.")
+            self.process.terminate()
+            await self.process.wait()
+        if self.session:
+            await self.session.close()
+        logger.info("HiddifyTester shut down.")
+
+    async def _rpc_call(self, method: str, params: Dict[str, Any] | None = None) -> Dict[str, Any]:
+        """Executes a JSON-RPC call to the Hiddify-Core process."""
+        payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}}
+        url = f"http://127.0.0.1:{self.rpc_port}/jsonrpc"
+        try:
+            async with self.session.post(url, json=payload) as response:
+                response.raise_for_status()
+                result = await response.json()
+                if "error" in result:
+                    raise RuntimeError(f"RPC Error: {result['error']}")
+                return result.get("result", {})
+        except aiohttp.ClientError as e:
+            logger.error(f"RPC call '{method}' failed: {e}")
+            raise
+
+    async def test_node(self, node: Node) -> NodeMetrics:
+        """Tests a single node and returns its metrics."""
+        socks_port = self.port_manager.get_port()
+        latency_ms = -1
+        throughput_kbps = -1
+        success = False
+
+        try:
+            # 1. Select the proxy
+            await self._rpc_call("proxy.select", {"tag": "outbound", "proxy": node.config})
+
+            # 2. Test latency
+            latency_result = await self._rpc_call(
+                "proxy.urltest", {"tag": "outbound", "url": self.config.LATENCY_TEST_URL}
+            )
+            latency_ms = latency_result.get("delay", -1)
+
+            if latency_ms > 0 and latency_ms < self.config.MAX_LATENCY_MS:
+                # 3. Test throughput if latency is acceptable
+                speed_result = await self._rpc_call(
+                    "proxy.urltest", {"tag": "outbound", "url": self.config.SPEED_TEST_URL}
+                )
+                download_kbps = speed_result.get("download_speed", 0) / 1024
+                
+                if download_kbps > self.config.MIN_THROUGHPUT_KBPS:
+                    throughput_kbps = download_kbps
+                    success = True
+                    logger.debug(f"Node {node.remark} passed: Latency {latency_ms}ms, Speed {throughput_kbps:.2f} KB/s")
+                else:
+                    logger.debug(f"Node {node.remark} failed speed test: {download_kbps:.2f} KB/s")
+            else:
+                logger.debug(f"Node {node.remark} failed latency test: {latency_ms}ms")
+
+        except (RuntimeError, aiohttp.ClientError) as e:
+            logger.warning(f"Test failed for node {node.remark}: {e}")
+        except Exception as e:
+            logger.error(f"An unexpected error occurred testing {node.remark}: {e}", exc_info=True)
+        finally:
+            self.port_manager.release_port(socks_port)
+
+        return NodeMetrics(
+            node_id=node.node_id,
+            success=success,
+            latency_ms=latency_ms,
+            throughput_kbps=throughput_kbps,
+        )

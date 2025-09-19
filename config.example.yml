@@ -1,0 +1,85 @@
+# V2Ray/Xray Scanner Ultimate - Configuration File
+# Copy this file to config.yml and edit it to your needs.
+# Environment variables will override settings in this file.
+
+# ---------------------------------------------------------------------------- #
+#                           APPLICATION SETTINGS                               #
+# ---------------------------------------------------------------------------- #
+
+# Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+log_level: "INFO"
+
+# Interval in minutes for running the scan cycle. 
+# Set to 0 to run only once.
+run_interval_minutes: 60
+
+# Port for the health check server
+health_server_port: 8080
+
+# ---------------------------------------------------------------------------- #
+#                             FETCHER SETTINGS                                 #
+# ---------------------------------------------------------------------------- #
+
+# List of subscription URLs to fetch proxy configs from.
+# You can add as many URLs as you want.
+subscription_sources:
+  - "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/All_Configs_base64.txt"
+  # - "https://example.com/another/subscription"
+
+# Timeout in seconds for downloading subscription files.
+download_timeout: 10
+
+# Maximum number of retries for a failed download.
+max_retries: 2
+
+# Delay in seconds before the first retry.
+retry_delay: 2
+
+# Factor by which the retry delay increases (exponential backoff).
+backoff_factor: 2.0
+
+# ---------------------------------------------------------------------------- #
+#                              TESTER SETTINGS                                 #
+# ---------------------------------------------------------------------------- #
+
+# Path to the Xray binary executable.
+xray_binary: "./cores/xray-core"
+
+# Timeout in seconds for the HTTP connectivity test.
+http_timeout: 8
+
+# Target URL for the connectivity test.
+# Using a URL that reveals the user's IP is a good choice.
+connectivity_test_url: "https://www.google.com/generate_204"
+
+
+# ---------------------------------------------------------------------------- #
+#                              FILTER SETTINGS                                 #
+# ---------------------------------------------------------------------------- #
+
+# Maximum allowed latency in milliseconds for a proxy to be considered "good".
+max_latency_ms: 2000
+
+# Filter nodes that have failed more than this many times in their history.
+max_historic_fail_count: 5
+
+# The reliability threshold (0.0 to 1.0) for a node to be included.
+# A value of 0.75 means the node must have a 75% success rate.
+min_reliability: 0.75
+
+
+# ---------------------------------------------------------------------------- #
+#                             OUTPUT SETTINGS                                  #
+# ---------------------------------------------------------------------------- #
+
+# Directory where output files will be saved.
+output_dir: "output"
+
+# Directory for caching temporary files.
+cache_dir: "cache"
+
+# Directory for storing application history data.
+history_dir: "history"
+
+# Directory for log files.
+logs_dir: "logs"

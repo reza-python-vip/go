@@ -1,8 +1,4 @@
-requests
-colorama
-maxminddb-geolite2
-flake8
-pytest
-pip-audit
-bandit
-pytest-cov
+aiohttp
+fastapi
+uvicorn
+pydantic

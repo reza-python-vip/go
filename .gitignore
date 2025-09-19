@@ -1,98 +1,28 @@
-# Python
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
+
+# C extensions
 *.so
+
+# Distribution / packaging
 .Python
-env/
-venv/
-ENV/
-.venv
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Logs
-*.log
-logs/
-*.logs
-
-# Output
-output/*
-!output/.gitkeep
-!output/reports/
-!output/stats/
-!output/backups/
-
-# Cores
-cores/*
-!cores/.gitkeep
-
-# Cache
-.cache/
-cache/
-.nox/
-.coverage
-.coverage.*
-*.cover
-.hypothesis/
-.pytest_cache/
-
-# Environment
-.env
-.venv
-env/
-venv/
-ENV/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-
-# Temporary files
-/tmp/
-/temp/
-*.tmp
-*.temp
-
-# Docker
-.docker/
-docker-compose.override.yml
-
-# Build artifacts
 build/
 dist/
-*.tar.gz
-*.whl
 
-# Security
-*.key
-*.cert
-*.pem
-*.crt
+# Project-specific
+.venv/
+cores/
+results/
+config.json
 
-# Backup files
-*.bak
-*.backup
+# IDE / Editor specific
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
 
-# Large files
-*.large
-*.h5
-*.model
-*.weights
-
-# Local development
-.local/
-.devcontainer/
+# OS-specific
+.DS_Store
+Thumbs.db

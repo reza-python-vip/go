@@ -17,16 +17,11 @@
 # 1. Clone and setup
 git clone <repository>
 cd v2ray-scanner-ultimate
-bash bootstrap.sh
+python install.py
 
 # 2. Run with Docker (recommended)
 docker-compose up
 
 # 3. Or run manually
-python3 -m src.fetcher
-python3 -m src.xray_tester
-python3 -m src.hiddify_tester
-python3 -m src.filter
-python3 -m src.reporter
+python -m src.main
 ```
-ترکیب کن بصورت کامل و دقیق ترین کن. خودکار ترین کن حرفه ای ترین کن خفن‌ترین هوشمند ترین کن بدون هیچ ارور ترین کن بدون هیچ خطا‌ ترین باشه

@@ -1,151 +1,133 @@
-
 import os
-import subprocess
+import platform
 import requests
-import zipfile
 import shutil
-import stat
+import subprocess
 import sys
+import zipfile
+from pathlib import Path
 
 # --- Configuration ---
-XRAY_VERSION = "v1.8.10"
-HIDDIFY_VERSION = "v3.2.0"
+BASE_DIR = Path(__file__).parent.resolve()
+CORES_DIR = BASE_DIR / "cores"
 
-XRAY_URL = f"https://github.com/XTLS/Xray-core/releases/download/{XRAY_VERSION}/Xray-linux-64.zip"
-HIDDIFY_URL = f"https://github.com/hiddify/hiddify-core/releases/download/{HIDDIFY_VERSION}/hiddify-linux-amd64.zip"
+XRAY_REPO = "XTLS/Xray-core"
+HIDDIFY_REPO = "hiddify/hiddify-core"
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CORES_DIR = os.path.join(BASE_DIR, "cores")
-TMP_DIR = os.path.join(BASE_DIR, "tmp_setup")
-VENV_DIR = os.path.join(BASE_DIR, ".venv")
+# --- Color Codes for Output ---
+class Colors:
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    RED = '\033[91m'
+    BLUE = '\033[94m'
+    ENDC = '\033[0m'
 
-XRAY_ZIP_PATH = os.path.join(TMP_DIR, "xray.zip")
-HIDDIFY_ZIP_PATH = os.path.join(TMP_DIR, "hiddify.zip")
+def print_color(text, color):
+    print(f"{color}{text}{Colors.ENDC}")
 
-XRAY_BINARY_PATH = os.path.join(CORES_DIR, "xray-core")
-HIDDIFY_BINARY_PATH = os.path.join(CORES_DIR, "hiddify-cli")
+def get_system_info():
+    """Detects the OS and architecture."""
+    os_type = platform.system().lower()
+    arch = platform.machine().lower()
 
-# --- Color Codes ---
-GREEN = "\033[0;32m"
-YELLOW = "\033[1;33m"
-RED = "\033[0;31m"
-NC = "\033[0m"
+    if os_type not in ["linux", "darwin"]:
+        raise NotImplementedError(f"Unsupported OS: {os_type}")
 
-# --- Helper Functions ---
+    if "aarch64" in arch or "arm64" in arch:
+        arch = "arm64-v8a" if os_type == "linux" else "arm64"
+    elif "x86_64" in arch or "amd64" in arch:
+        arch = "64"
+    else:
+        raise NotImplementedError(f"Unsupported architecture: {arch}")
 
-def print_step(message):
-    print(f"\n{YELLOW}➡️  {message}{NC}")
+    return os_type, arch
 
-def print_success(message):
-    print(f"{GREEN}✅ {message}{NC}")
-
-def print_error(message):
-    print(f"{RED}❌ {message}{NC}")
-    sys.exit(1)
-
-def run_command(command):
+def get_latest_release_asset_url(repo, keyword):
+    """Finds the download URL for the latest release asset matching the keyword."""
+    print_color(f"🔍 Searching for latest release of {repo}...", Colors.BLUE)
+    api_url = f"https://api.github.com/repos/{repo}/releases/latest"
     try:
-        subprocess.run(command, check=True, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        return True
-    except subprocess.CalledProcessError as e:
-        print_error(f"Command failed: {command}\nStdout: {e.stdout.decode()}\nStderr: {e.stderr.decode()}")
-        return False
+        response = requests.get(api_url)
+        response.raise_for_status()
+        assets = response.json()["assets"]
+        for asset in assets:
+            if keyword in asset["name"]:
+                print_color(f"✅ Found asset: {asset['name']}", Colors.GREEN)
+                return asset["browser_download_url"]
+        raise FileNotFoundError(f"No asset found for keyword '{keyword}' in {repo}")
+    except requests.RequestException as e:
+        raise ConnectionError(f"Failed to fetch release info from GitHub API: {e}")
 
-def download_file(url, dest_path):
-    print_step(f"Downloading {url} to {dest_path}")
+def download_and_unzip(url, target_dir, binary_name):
+    """Downloads a zip file, extracts a specific binary, and makes it executable."""
+    target_dir.mkdir(parents=True, exist_ok=True)
+    zip_path = target_dir / Path(url).name
+    binary_path = target_dir / binary_name
+
+    print_color(f"Downloading {url}...", Colors.BLUE)
     try:
-        with requests.get(url, stream=True, timeout=60) as r:
+        with requests.get(url, stream=True) as r:
             r.raise_for_status()
-            with open(dest_path, "wb") as f:
+            with open(zip_path, 'wb') as f:
                 for chunk in r.iter_content(chunk_size=8192):
                     f.write(chunk)
-        print_success("Download complete.")
-        return True
-    except requests.exceptions.RequestException as e:
-        print_error(f"Failed to download {url}: {e}")
-        return False
+    except requests.RequestException as e:
+        raise ConnectionError(f"Failed to download file: {e}")
 
-def extract_zip(zip_path, dest_dir, binary_name, final_name):
-    print_step(f"Extracting {zip_path}")
+    print_color("Unpacking archive...", Colors.BLUE)
+    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        # Find the binary in the zip file and extract it
+        for member in zip_ref.namelist():
+            if binary_name in member and not member.endswith('.sig'):
+                with zip_ref.open(member) as source, open(binary_path, "wb") as target:
+                    shutil.copyfileobj(source, target)
+                break
+        else:
+            raise FileNotFoundError(f"Could not find '{binary_name}' in the downloaded archive.")
+
+    os.remove(zip_path)
+    os.chmod(binary_path, 0o755) # Make it executable
+    print_color(f"✨ Successfully installed {binary_name} to {binary_path}", Colors.GREEN)
+
+def install_dependencies():
+    """Installs Python packages from requirements.txt."""
+    print_color("🐍 Installing Python dependencies...", Colors.BLUE)
     try:
-        with zipfile.ZipFile(zip_path, "r") as zip_ref:
-            # Find the binary in the zip file
-            binary_path_in_zip = None
-            for name in zip_ref.namelist():
-                if binary_name.lower() in name.lower() and not name.endswith("/"):
-                     binary_path_in_zip = name
-                     break
-            
-            if not binary_path_in_zip:
-                print_error(f"Could not find '{binary_name}' in {zip_path}")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
+        print_color("✅ Dependencies installed successfully.", Colors.GREEN)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"Failed to install Python packages: {e}")
 
-            # Extract the binary
-            zip_ref.extract(binary_path_in_zip, dest_dir)
-            
-            # Rename and move
-            extracted_path = os.path.join(dest_dir, binary_path_in_zip)
-            final_path = os.path.join(dest_dir, final_name)
-            shutil.move(extracted_path, final_path)
-
-            print_success(f"Extracted and moved to {final_path}")
-            return True
-
-    except (zipfile.BadZipFile, KeyError) as e:
-        print_error(f"Failed to extract {zip_path}: {e}")
-        return False
-
-def make_executable(path):
-    print_step(f"Making {path} executable")
-    try:
-        st = os.stat(path)
-        os.chmod(path, st.st_mode | stat.S_IEXEC)
-        print_success(f"{path} is now executable.")
-        return True
-    except OSError as e:
-        print_error(f"Failed to make {path} executable: {e}")
-        return False
-
-# --- Main Setup ---
 def main():
-    print_step("🚀 Starting V2Ray Scanner Ultimate Setup")
+    """Main installation function."""
+    print_color("🚀 Starting Professional Proxy Installer...", Colors.YELLOW)
+    try:
+        os_type, arch = get_system_info()
+        print_color(f"System detected: {os_type.capitalize()} {arch}", Colors.BLUE)
 
-    # 1. Create directories
-    os.makedirs(CORES_DIR, exist_ok=True)
-    os.makedirs(TMP_DIR, exist_ok=True)
-    
-    # 2. Download Cores
-    download_file(XRAY_URL, XRAY_ZIP_PATH)
-    download_file(HIDDIFY_URL, HIDDIFY_ZIP_PATH)
+        # --- Install Xray-core ---
+        xray_keyword = f"{os_type}-{arch}.zip"
+        xray_url = get_latest_release_asset_url(XRAY_REPO, xray_keyword)
+        download_and_unzip(xray_url, CORES_DIR, "xray")
 
-    # 3. Extract Cores
-    extract_zip(XRAY_ZIP_PATH, CORES_DIR, "xray", "xray-core")
-    extract_zip(HIDDIFY_ZIP_PATH, CORES_DIR, "hiddify-cli", "hiddify-cli")
+        # --- Install hiddify-core ---
+        # Note: Hiddify has a different naming scheme
+        hiddify_arch = {"64": "amd64", "arm64": "arm64"}.get(arch, arch)
+        hiddify_keyword = f"{os_type}-{hiddify_arch}"
+        hiddify_url = get_latest_release_asset_url(HIDDIFY_REPO, hiddify_keyword)
+        download_and_unzip(hiddify_url, CORES_DIR, "hiddify")
 
-    # 4. Make binaries executable
-    make_executable(XRAY_BINARY_PATH)
-    make_executable(HIDDIFY_BINARY_PATH)
+        # --- Install Python Deps ---
+        install_dependencies()
 
-    # 5. Create and activate virtual environment
-    print_step("Creating Python virtual environment")
-    if not os.path.exists(VENV_DIR):
-        run_command(f"{sys.executable} -m venv {VENV_DIR}")
+        print_color("🎉 All components installed successfully! You are ready to go.", Colors.GREEN)
 
-    # Determine the correct pip path
-    pip_executable = os.path.join(VENV_DIR, "bin", "pip")
-
-    # 6. Install Python dependencies
-    print_step("Installing Python dependencies from requirements.txt")
-    run_command(f"{pip_executable} install --upgrade -r requirements.txt")
-
-    # 7. Final cleanup
-    print_step("Cleaning up temporary files")
-    shutil.rmtree(TMP_DIR)
-    print_success("Cleanup complete.")
-
-    print_success("\n🎉 Setup complete! You can now run the scanner. 🎉")
-    print_success(f"To run manually, activate the virtual environment: \n  source {os.path.join(VENV_DIR, 'bin', 'activate')}")
-    print_success("Then, see the README.md for instructions.")
-
+    except (NotImplementedError, FileNotFoundError, ConnectionError, RuntimeError) as e:
+        print_color(f"❌ Installation failed: {e}", Colors.RED)
+        sys.exit(1)
+    except Exception as e:
+        print_color(f"An unexpected error occurred: {e}", Colors.RED)
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
