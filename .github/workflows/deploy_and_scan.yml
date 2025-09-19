@@ -1,6 +1,5 @@
-name: Ultimate Deploy, Scan, and Notify
+name: Ultimate Deploy, Scan, and Notify (Error-Proof, Pro Edition)
 
-# Triggers
 on:
   push:
     branches: [ main ]
@@ -21,14 +20,14 @@ env:
   HTTP_TIMEOUT: "5.0"
   DOWNLOAD_TIMEOUT: "8.0"
   CONNECTION_TIMEOUT: "4.0"
-  STRICT: "false"
+  STRICT: "true"
 
 jobs:
   ################################################################
-  # 0) Preflight: check required files and secrets (warn/decide)
+  # 0) Preflight: check required files and secrets (fail if missing)
   ################################################################
   preflight:
-    name: Preflight validations
+    name: Preflight validations (Fails if any critical error)
     runs-on: ubuntu-latest
     outputs:
       ok: ${{ steps.check.outputs.ok }}
@@ -37,44 +36,50 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Ensure required scripts/files and detect deployment credentials (non-fatal)
+      - name: Ensure required scripts/files and detect deployment credentials (Fatal if missing)
         id: check
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
           GCP_WI_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         run: |
+          set -euo pipefail
           missing=()
-          # Optional project scripts - warn if missing but don't fail the whole pipeline.
-          for f in scripts/deploy_firebase.sh src/fetcher.py src/xray_tester.py src/hiddify_tester.py src/filter.py src/reporter.py scripts/verify_output.py; do
+          fatal_missing=()
+          # List all critical files here:
+          for f in scripts/deploy_firebase.sh src/fetcher.py src/xray_tester.py src/hiddify_tester.py src/filter.py src/reporter.py scripts/verify_output.py requirements.txt; do
             if [ ! -e "$f" ]; then
-              echo "Warning: optional file not found: $f"
-              missing+=("$f")
+              echo "::error::Critical file not found: $f"
+              fatal_missing+=("$f")
             fi
           done
+          if (( ${#fatal_missing[@]} > 0 )); then
+            echo "::error::Workflow stopped due to missing files: ${fatal_missing[*]}"
+            echo "ok=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
 
           # Decide if deploy is possible (either token or workload identity provider must exist)
           deploy_ready=false
           if [ -n "${FIREBASE_TOKEN:-}" ] || [ -n "${GCP_WI_PROVIDER:-}" ]; then
             deploy_ready=true
           else
-            echo "Warning: No deployment credential found. Deploy/notify jobs will be skipped."
+            echo "::warning::No deployment credential found. Deploy/notify jobs will be skipped."
           fi
 
           # CODECOV token presence noted (upload skipped if absent)
           if [ -z "${CODECOV_TOKEN:-}" ]; then
-            echo "Note: CODECOV_TOKEN is not set. Codecov upload will be skipped for private repos."
+            echo "::warning::CODECOV_TOKEN is not set. Codecov upload will be skipped for private repos."
           fi
 
-          # This preflight step will not fail the workflow; it only publishes outputs for downstream decisions.
           echo "ok=true" >> $GITHUB_OUTPUT
           echo "deploy_ready=${deploy_ready}" >> $GITHUB_OUTPUT
 
   ################################################################
-  # 1) Quality & Security (CI matrix)
+  # 1) Quality & Security (CI matrix, strict error handling)
   ################################################################
   quality_and_security_shield:
-    name: Cross-Platform Quality & Security Shield
+    name: Cross-Platform Quality & Security Shield (Error-proof)
     needs: preflight
     if: needs.preflight.outputs.ok == 'true'
     runs-on: ${{ matrix.os }}
@@ -100,55 +105,49 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      - name: Install requirements (if present)
+      - name: Install requirements (fail if missing)
         run: |
+          set -euo pipefail
           if [ -f requirements.txt ]; then
             python -m pip install --upgrade pip
             python -m pip install -r requirements.txt
           else
-            echo "requirements.txt not found, skipping."
+            echo "::error::requirements.txt not found, aborting."
+            exit 1
           fi
 
       - name: Install dev tools (lint/test/security)
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip
           python -m pip install flake8 bandit pip-audit pytest coverage
 
-      - name: Lint (flake8) — configurable strictness
+      - name: Lint (flake8) — strict
         env:
           STRICT: ${{ env.STRICT }}
         run: |
-          if [ "${STRICT}" = "true" ]; then
-            flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-          else
-            flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics || true
-          fi
+          set -euo pipefail
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
 
       - name: Security scan: bandit
         run: |
-          bandit -r . -ll -ii || true
+          set -euo pipefail
+          bandit -r . -ll -ii
 
       - name: Dependency scan: pip-audit
         run: |
-          pip-audit || true
+          set -euo pipefail
+          pip-audit
 
-      - name: Run tests + collect coverage
+      - name: Run tests + collect coverage (fail if test fails)
         id: run_tests
         run: |
           set -euo pipefail
           coverage_exists=false
-
-          if python -m pytest --cov=src --cov-report=xml; then
-            if [ -f coverage.xml ]; then
-              coverage_exists=true
-            fi
-          else
-            echo "pytest returned non-zero exit code"
-            if [ "${STRICT}" = "true" ]; then
-              exit 1
-            fi
+          python -m pytest --cov=src --cov-report=xml
+          if [ -f coverage.xml ]; then
+            coverage_exists=true
           fi
-
           echo "coverage_exists=${coverage_exists}" >> $GITHUB_OUTPUT
 
       - name: Upload coverage to Codecov (only when coverage exists and token present)
@@ -161,10 +160,10 @@ jobs:
           fail_ci_if_error: true
 
   ################################################################
-  # 2) Build & Scan (fetch → test → filter → report)
+  # 2) Build & Scan (fetch → test → filter → report, error-proof)
   ################################################################
   build_and_scan:
-    name: Build and Scan
+    name: Build and Scan (Error-proof)
     needs: [preflight, quality_and_security_shield]
     if: needs.preflight.outputs.ok == 'true'
     runs-on: ubuntu-latest
@@ -191,67 +190,50 @@ jobs:
           restore-keys: |
             ubuntu-latest-pip-
 
-      - name: Install dependencies (if exist)
+      - name: Install dependencies (fail if missing)
         run: |
-          if [ -f requirements.txt ]; then python -m pip install -r requirements.txt; fi
+          set -euo pipefail
+          if [ -f requirements.txt ]; then python -m pip install -r requirements.txt; else echo "::error::requirements.txt missing"; exit 1; fi
 
       - name: Install application components (cores) if needed
         id: install_cores
         run: |
+          set -euo pipefail
           if [ -f install.py ]; then
-            python install.py || echo "install.py failed (check logs)"
+            python install.py
           else
             echo "install.py not present - skipping cores install"
           fi
 
-      - name: 1. Fetch Subscription Sources (if present)
+      - name: 1. Fetch Subscription Sources (Fatal if missing)
         run: |
-          set -e
-          if [ -f src/fetcher.py ]; then
-            python3 -m src.fetcher
-          else
-            echo "Skipping fetcher: src/fetcher.py not found"
-          fi
+          set -euo pipefail
+          python3 -m src.fetcher
 
-      - name: 2. Test Proxies (Xray) — if xray tester exists
+      - name: 2. Test Proxies (Xray)
         run: |
-          if [ -f src/xray_tester.py ]; then
-            python3 -m src.xray_tester
-          else
-            echo "Skipping xray_tester: src/xray_tester.py not found"
-          fi
+          set -euo pipefail
+          python3 -m src.xray_tester
 
-      - name: 3. Test Proxies (Hiddify) — if hiddify tester exists
+      - name: 3. Test Proxies (Hiddify)
         run: |
-          if [ -f src/hiddify_tester.py ]; then
-            python3 -m src.hiddify_tester
-          else
-            echo "Skipping hiddify_tester: src/hiddify_tester.py not found"
-          fi
+          set -euo pipefail
+          python3 -m src.hiddify_tester
 
       - name: 4. Filter and Generate Lists
         run: |
-          if [ -f src/filter.py ]; then
-            python3 -m src.filter
-          else
-            echo "Skipping filter: src/filter.py not found"
-          fi
+          set -euo pipefail
+          python3 -m src.filter
 
       - name: 5. Generate Final Reports
         run: |
-          if [ -f src/reporter.py ]; then
-            python3 -m src.reporter
-          else
-            echo "Skipping reporter: src/reporter.py not found"
-          fi
+          set -euo pipefail
+          python3 -m src.reporter
 
       - name: 6. Self-Verification Gate
         run: |
-          if [ -f scripts/verify_output.py ]; then
-            python3 scripts/verify_output.py || echo "verify_output failed (check logs)"
-          else
-            echo "Skipping verify_output: scripts/verify_output.py not found"
-          fi
+          set -euo pipefail
+          python3 scripts/verify_output.py
 
       - name: Count Proxies (always runs)
         id: count_proxies
@@ -268,6 +250,7 @@ jobs:
       - name: Ensure artifact dirs exist (avoid upload failure)
         if: always()
         run: |
+          set -euo pipefail
           mkdir -p output logs
           if [ ! -f output/.placeholder ]; then touch output/.placeholder; fi
 
@@ -285,7 +268,7 @@ jobs:
   # 3) Deploy (Firebase) — runs only when deploy credentials present
   ################################################################
   deploy:
-    name: Deploy to Firebase
+    name: Deploy to Firebase (Error-proof)
     needs: build_and_scan
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -296,16 +279,18 @@ jobs:
 
       - name: Install Node & firebase-tools
         run: |
+          set -euo pipefail
           if ! command -v firebase >/dev/null 2>&1; then
             npm install -g firebase-tools
           fi
-          firebase --version || true
+          firebase --version
 
       - name: Make deploy script executable
         run: |
-          if [ -f scripts/deploy_firebase.sh ]; then chmod +x scripts/deploy_firebase.sh; fi
+          set -euo pipefail
+          chmod +x scripts/deploy_firebase.sh
 
-      - name: Deploy to Firebase (prefer FIREBASE_TOKEN; fallback => guidance)
+      - name: Deploy to Firebase (using FIREBASE_TOKEN)
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
           GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
@@ -313,14 +298,9 @@ jobs:
           set -euo pipefail
           if [ -n "${FIREBASE_TOKEN:-}" ]; then
             echo "Using FIREBASE_TOKEN to deploy."
-            if [ -f scripts/deploy_firebase.sh ]; then
-              ./scripts/deploy_firebase.sh
-            else
-              echo "deploy_firebase.sh missing; aborting deploy."
-              exit 1
-            fi
+            ./scripts/deploy_firebase.sh
           else
-            echo "FIREBASE_TOKEN is not provided. To deploy without a token, configure Workload Identity (OIDC) and update this job."
+            echo "::error::FIREBASE_TOKEN is not provided. To deploy without a token, configure Workload Identity (OIDC) and update this job."
             exit 1
           fi
 
@@ -328,7 +308,7 @@ jobs:
   # 4) Notify Users (FCM) — uses OIDC / Workload Identity (only if present)
   ################################################################
   notify_users:
-    name: Notify Users (FCM)
+    name: Notify Users (FCM, Error-proof)
     needs: [deploy, build_and_scan]
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -351,6 +331,7 @@ jobs:
       - name: Get access token
         id: get_token
         run: |
+          set -euo pipefail
           ACCESS_TOKEN=$(gcloud auth print-access-token)
           echo "access_token=${ACCESS_TOKEN}" >> $GITHUB_OUTPUT
 
