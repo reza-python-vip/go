@@ -4,8 +4,6 @@ on:
   push:
     branches: [ main ]
   workflow_dispatch: {}
-  # schedule:
-  #   - cron: "0 * * * *"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -49,7 +47,6 @@ jobs:
           set -euo pipefail
           missing=()
           fatal_missing=()
-          # List all critical files here:
           for f in scripts/deploy_firebase.sh src/fetcher.py src/xray_tester.py src/hiddify_tester.py src/filter.py src/reporter.py scripts/verify_output.py requirements.txt; do
             if [ ! -e "$f" ]; then
               echo "::error::Critical file not found: $f"
@@ -62,7 +59,6 @@ jobs:
             exit 1
           fi
 
-          # Decide if deploy is possible (either token or workload identity provider must exist)
           deploy_ready=false
           if [ -n "${FIREBASE_TOKEN:-}" ] || [ -n "${GCP_WI_PROVIDER:-}" ]; then
             deploy_ready=true
@@ -70,7 +66,6 @@ jobs:
             echo "::warning::No deployment credential found. Deploy/notify jobs will be skipped."
           fi
 
-          # CODECOV token presence noted (upload skipped if absent)
           if [ -z "${CODECOV_TOKEN:-}" ]; then
             echo "::warning::CODECOV_TOKEN is not set. Codecov upload will be skipped for private repos."
           fi
@@ -359,22 +354,22 @@ jobs:
           set -euo pipefail
           TITLE="Proxies Updated"
           BODY="${PROXY_COUNT} new proxies are available!"
-          cat > /tmp/fcm_payload.json <<EOF
-{
-  "message": {
-    "topic": "news",
-    "notification": {
-      "title": "${TITLE}",
-      "body": "${BODY}"
-    },
-    "data": {
-      "update_type": "proxy_list",
-      "proxy_count": "${PROXY_COUNT}",
-      "timestamp": "$(date +%s)"
-    }
-  }
-}
-EOF
+          cat > /tmp/fcm_payload.json <<'EOF'
+          {
+            "message": {
+              "topic": "news",
+              "notification": {
+                "title": "'"${TITLE}"'",
+                "body": "'"${BODY}"'"
+              },
+              "data": {
+                "update_type": "proxy_list",
+                "proxy_count": "'"${PROXY_COUNT}"'",
+                "timestamp": "'"$(date +%s)"'"
+              }
+            }
+          }
+          EOF
           curl -sS -X POST "https://fcm.googleapis.com/v1/projects/${GCP_PROJECT_ID}/messages:send" \
             -H "Authorization: Bearer ${ACCESS_TOKEN}" \
             -H "Content-Type: application/json" \
