@@ -68,31 +68,3 @@ def get_open_port() -> int:
 		return s.getsockname()[1]
 
 __all__ = ["decode_base64_text", "safe_write", "PortManager", "get_open_port"]
-
-
-# Simple port utilities used by testers
-
-
-class PortManager:
-	"""A simple manager to allocate ports from a range."""
-	def __init__(self, start: int = 20000, end: int = 21000):
-		self.start = start
-		self.end = end
-		self._next = start
-
-	def get_port(self) -> int:
-		# naive sequential allocator; wrap around if necessary
-		port = self._next
-		self._next += 1
-		if self._next > self.end:
-			self._next = self.start
-		return port
-
-
-def get_open_port() -> int:
-	"""Return an available ephemeral port from the OS."""
-	with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-		s.bind(("", 0))
-		return s.getsockname()[1]
-
-__all__.extend(["PortManager", "get_open_port"])

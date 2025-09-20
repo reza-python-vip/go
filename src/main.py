@@ -24,7 +24,7 @@ from .models import Node, NodeMetrics
 from .tester_base import NodeTester
 from .parsers import parse_links
 from .reporter import generate_report
-from .utils import safe_write
+from .utils import PortManager, safe_write
 from .xray_tester import XrayTester
 from .hiddify_tester import HiddifyTester
 

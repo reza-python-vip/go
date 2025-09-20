@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import List
+from typing import Any, Dict, List
 
 import logging
 
@@ -66,13 +66,13 @@ class Config(BaseSettings):
     KEEP_ALIVE: bool = Field(default=False)
     HISTORY_FILE: Path = Field(default=Path("history.json"))
     
-    class Config:
-        """Pydantic config."""
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+    )
         
-    @validator("XRAY_SOCKS_PORT_END")
+    @field_validator("XRAY_SOCKS_PORT_END")
     def validate_port_range(cls, v: int, values: Dict[str, Any]) -> int:
         """Validate that port range is valid."""
         start = values.get("XRAY_SOCKS_PORT_START", 10000)
@@ -80,7 +80,7 @@ class Config(BaseSettings):
             raise ValueError(f"XRAY_SOCKS_PORT_END ({v}) must be greater than XRAY_SOCKS_PORT_START ({start})")
         return v
     
-    @validator("XRAY_BINARY", "TEMP_DIR", "OUTPUT_DIR")
+    @field_validator("XRAY_BINARY", "TEMP_DIR", "OUTPUT_DIR")
     def validate_directories(cls, v: Path) -> Path:
         """Validate that directories exist and are accessible."""
         if not v.parent.exists():
@@ -90,14 +90,14 @@ class Config(BaseSettings):
                 raise ValueError(f"Could not create directory {v.parent}: {e}")
         return v
     
-    @validator("LATENCY_TEST_URL")
+    @field_validator("LATENCY_TEST_URL")
     def validate_url(cls, v: str) -> str:
         """Validate that URL is properly formatted."""
         if not v.startswith(("http://", "https://")):
             raise ValueError("LATENCY_TEST_URL must start with http:// or https://")
         return v
     
-    @root_validator
+    @model_validator
     def validate_timeouts(cls, values: Dict[str, Any]) -> Dict[str, Any]:
         """Validate that timeouts are properly configured."""
         http_timeout = values.get("HTTP_TIMEOUT", 5.0)
@@ -136,34 +136,34 @@ class Config(BaseSettings):
     HIDDIFY_BINARY: Path = CORES_DIR / "hiddify"
 
     # --- Run Control ---
-    TESTER: str = Field("xray", env="TESTER")  # Can be 'xray' or 'hiddify'
-    RUN_INTERVAL_MINUTES: int = Field(60, env="RUN_INTERVAL_MINUTES")
+    TESTER: str = Field("xray", validation_alias="TESTER")  # Can be 'xray' or 'hiddify'
+    RUN_INTERVAL_MINUTES: int = Field(60, validation_alias="RUN_INTERVAL_MINUTES")
 
     # --- Network Settings ---
-    HTTP_TIMEOUT: float = Field(8.0, env="HTTP_TIMEOUT")
-    LATENCY_TEST_URL: str = Field("http://cp.cloudflare.com/", env="LATENCY_TEST_URL")
-    SPEED_TEST_URL: str = Field("https://raw.githubusercontent.com/v2fly/v2ray-core/master/LICENSE", env="SPEED_TEST_URL")
+    HTTP_TIMEOUT: float = Field(8.0, validation_alias="HTTP_TIMEOUT")
+    LATENCY_TEST_URL: str = Field("http://cp.cloudflare.com/", validation_alias="LATENCY_TEST_URL")
+    SPEED_TEST_URL: str = Field("https://raw.githubusercontent.com/v2fly/v2ray-core/master/LICENSE", validation_alias="SPEED_TEST_URL")
 
     # --- Tester Configuration ---
-    MAX_CONCURRENT_TESTS: int = Field(50, env="MAX_CONCURRENT_TESTS")
-    XRAY_SOCKS_PORT_START: int = Field(20000, env="XRAY_SOCKS_PORT_START")
-    XRAY_SOCKS_PORT_END: int = Field(21000, env="XRAY_SOCKS_PORT_END")
+    MAX_CONCURRENT_TESTS: int = Field(50, validation_alias="MAX_CONCURRENT_TESTS")
+    XRAY_SOCKS_PORT_START: int = Field(20000, validation_alias="XRAY_SOCKS_PORT_START")
+    XRAY_SOCKS_PORT_END: int = Field(21000, validation_alias="XRAY_SOCKS_PORT_END")
 
     # --- Subscription Sources ---
     SUBSCRIPTION_SOURCES: List[str] = Field(
         default=["https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/All_Configs_base64.txt"],
-        env="SUBSCRIPTION_SOURCES",
+        validation_alias="SUBSCRIPTION_SOURCES",
     )
 
     # --- Filtering Criteria ---
-    MAX_LATENCY_MS: int = Field(2000, env="MAX_LATENCY_MS")
-    MIN_THROUGHPUT_KBPS: float = Field(100.0, env="MIN_THROUGHPUT_KBPS")
-    MAX_HISTORIC_FAIL_COUNT: int = Field(5, env="MAX_HISTORIC_FAIL_COUNT")
-    MIN_RELIABILITY: float = Field(0.75, env="MIN_RELIABILITY", ge=0.0, le=1.0)
+    MAX_LATENCY_MS: int = Field(2000, validation_alias="MAX_LATENCY_MS")
+    MIN_THROUGHPUT_KBPS: float = Field(100.0, validation_alias="MIN_THROUGHPUT_KBPS")
+    MAX_HISTORIC_FAIL_COUNT: int = Field(5, validation_alias="MAX_HISTORIC_FAIL_COUNT")
+    MIN_RELIABILITY: float = Field(0.75, validation_alias="MIN_RELIABILITY", ge=0.0, le=1.0)
 
     # --- Health & Logging ---
-    HEALTH_CHECK_PORT: int = Field(8080, env="HEALTH_CHECK_PORT")
-    LOG_LEVEL: str = Field("INFO", env="LOG_LEVEL")
+    HEALTH_CHECK_PORT: int = Field(8080, validation_alias="HEALTH_CHECK_PORT")
+    LOG_LEVEL: str = Field("INFO", validation_alias="LOG_LEVEL")
 
     # --- Output Files ---
     @property
@@ -206,12 +206,6 @@ class Config(BaseSettings):
             raise PermissionError(f"Binary for tester '{self.TESTER}' is not executable: {binary_path}")
 
         return self
-
-        model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        case_sensitive=False,
-    )
 
 # Instantiate the config to be used globally
 try:

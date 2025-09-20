@@ -211,5 +211,6 @@ class XrayTester:
                         break
                     bytes_downloaded += len(chunk)
         duration = time.monotonic() - start_time
-        if duration == 0: return 0.0
+        if duration == 0:
+            return 0.0
         return (bytes_downloaded * 8) / duration / 1024 # Kbps
