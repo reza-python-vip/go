@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+from datetime import UTC
 from typing import List
 
 from .models import Node, NodeMetrics
@@ -33,7 +34,7 @@ def generate_report(
     # --- Report Header ---
     report_lines = [
         "# 🚀 Proxy Scan Report",
-        f"*Generated on: {datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}*",
+        f"*Generated on: {datetime.datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}*",
         "",
         "## 📊 Summary",
         f"- **Total Nodes Tested:** {total_tested}",
