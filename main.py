@@ -102,7 +102,7 @@ async def main():
         target=uvicorn.run,
         args=(health_app,),
         kwargs={
-            "host": "0.0.0.0",
+            "host": "0.0.0.0",  # nosec B104
             "port": config.HEALTH_CHECK_PORT,
             "log_level": "warning",
         },

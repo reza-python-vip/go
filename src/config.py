@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -61,7 +62,7 @@ class Config(BaseSettings):
     # File paths
     XRAY_BINARY: Path = Field(default=Path("xray"))
     CONFIG_FILE: Path = Field(default=Path("config.yml"))
-    TEMP_DIR: Path = Field(default=Path("/tmp"))
+    TEMP_DIR: Path = Field(default_factory=lambda: Path(tempfile.gettempdir()))
     OUTPUT_DIR: Path = Field(default=Path("output"))
 
     # Test settings

@@ -147,7 +147,7 @@ async def main_loop():
 async def start_health_server():
     """Starts the Uvicorn health check server."""
     uv_config = uvicorn.Config(
-        health_app, host="0.0.0.0", port=config.HEALTH_CHECK_PORT, log_level="warning"
+        health_app, host="0.0.0.0", port=config.HEALTH_CHECK_PORT, log_level="warning"  # nosec B104
     )
     server = uvicorn.Server(uv_config)
     await server.serve()

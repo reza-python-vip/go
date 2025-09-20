@@ -93,7 +93,7 @@ def download_and_unzip(url, target_dir, binary_name):
             )
 
     os.remove(zip_path)
-    os.chmod(binary_path, 0o755)  # Make it executable
+    os.chmod(binary_path, 0o700)  # Make it executable
     print_color(
         f"✨ Successfully installed {binary_name} to {binary_path}", Colors.GREEN
     )

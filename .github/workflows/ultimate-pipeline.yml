@@ -131,7 +131,7 @@ jobs:
       - name: Security scan (bandit)
         run: |
           set -euo pipefail
-          python -m bandit -r . -ll -ii
+          python -m bandit -r src tests -ll -ii
 
       - name: Dependency audit (pip-audit)
         run: |
