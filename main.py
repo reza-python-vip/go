@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 async def run_once(config: Config, history: HistoryManager, tester: XrayTester):
     """Perform a single, complete scan and reporting cycle."""
-    main_loop_active = True
+    health_app.main_loop_active = True
     logger.info("Starting new scan cycle...")
 
     # 1. Fetch Nodes
@@ -70,7 +70,7 @@ async def run_once(config: Config, history: HistoryManager, tester: XrayTester):
 
     # 7. Save History
     await history.save_history()
-    main_loop_active = False
+    health_app.main_loop_active = False
     logger.info("Scan cycle completed.")
 
 
