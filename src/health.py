@@ -20,16 +20,18 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Proxy Scanner Health",
     description="Provides health and readiness probes for the proxy scanner service.",
-    version="2.0.0"
+    version="2.0.0",
 )
 
 # This global variable is updated by the main loop to signal its current state.
 main_loop_active = False
 
+
 @app.on_event("startup")
 async def startup_event():
     """Log that the health service is starting."""
     logger.info("Health check service started.")
+
 
 @app.get("/healthz", summary="Liveness Probe", status_code=status.HTTP_200_OK)
 def liveness_probe() -> dict:
@@ -39,6 +41,7 @@ def liveness_probe() -> dict:
     """
     logger.debug("Liveness probe request received.")
     return {"status": "alive"}
+
 
 @app.get("/readyz", summary="Readiness Probe")
 def readiness_probe(response: Response) -> dict:
@@ -67,19 +70,29 @@ def readiness_probe(response: Response) -> dict:
     # If loop not active, check the report file as a fallback
     report_path = Path(config.OUTPUT_REPORT_PATH)
     if not report_path.is_file():
-        logger.warning(f"Readiness check failed: Report file not found at {report_path}")
+        logger.warning(
+            f"Readiness check failed: Report file not found at {report_path}"
+        )
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-        return {"status": "not_ready", "reason": f"Output report missing at {report_path}"}
+        return {
+            "status": "not_ready",
+            "reason": f"Output report missing at {report_path}",
+        }
 
     try:
         report_mtime = report_path.stat().st_mtime
         now = datetime.datetime.now().timestamp()
-        max_age_seconds = (config.RUN_INTERVAL_MINUTES + 10) * 60  # Interval + 10min grace
+        max_age_seconds = (
+            config.RUN_INTERVAL_MINUTES + 10
+        ) * 60  # Interval + 10min grace
 
         if (now - report_mtime) > max_age_seconds:
             logger.warning("Readiness check failed: Report file is too old.")
             response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-            return {"status": "not_ready", "reason": "Report file has not been updated recently."}
+            return {
+                "status": "not_ready",
+                "reason": "Report file has not been updated recently.",
+            }
 
     except OSError as e:
         logger.error(f"Could not stat report file {report_path}: {e}")

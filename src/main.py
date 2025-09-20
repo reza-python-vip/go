@@ -7,9 +7,11 @@ import sys
 from typing import List, Type
 
 import uvicorn
+
 try:
     from tqdm.asyncio import tqdm  # optional dependency
 except ImportError:  # pragma: no cover - fallback when tqdm isn't installed
+
     def tqdm(iterable, **kwargs):
         """Fallback tqdm: returns the iterable unchanged when tqdm is not available."""
         return iterable
@@ -46,6 +48,7 @@ def get_tester_class() -> Type[NodeTester]:
         return HiddifyTester
     raise ValueError(f"Invalid tester specified: '{config.TESTER}'")
 
+
 async def test_all_nodes(
     tester_class: Type[NodeTester],
     nodes: List[Node],
@@ -61,7 +64,11 @@ async def test_all_nodes(
                 return await tester.test_node(node)
 
     tasks = [test_with_semaphore(node) for node in nodes]
-    progress = tqdm(asyncio.as_completed(tasks), total=len(tasks), desc=f"Testing via {config.TESTER}")
+    progress = tqdm(
+        asyncio.as_completed(tasks),
+        total=len(tasks),
+        desc=f"Testing via {config.TESTER}",
+    )
 
     for future in progress:
         try:
@@ -69,9 +76,12 @@ async def test_all_nodes(
             if metrics:
                 metrics_list.append(metrics)
         except Exception as e:
-            logger.error(f"A node test resulted in an unhandled exception: {e}", exc_info=True)
+            logger.error(
+                f"A node test resulted in an unhandled exception: {e}", exc_info=True
+            )
 
     return metrics_list
+
 
 async def run_scanner():
     """The main coroutine to run the complete scanner workflow."""
@@ -90,9 +100,13 @@ async def run_scanner():
         return
 
     tester_class = get_tester_class()
-    port_manager = PortManager(start=config.XRAY_SOCKS_PORT_START, end=config.XRAY_SOCKS_PORT_END)
+    port_manager = PortManager(
+        start=config.XRAY_SOCKS_PORT_START, end=config.XRAY_SOCKS_PORT_END
+    )
     metrics = await test_all_nodes(tester_class, nodes, port_manager)
-    logger.info(f"Testing complete. {sum(1 for m in metrics if m.success)} nodes passed.")
+    logger.info(
+        f"Testing complete. {sum(1 for m in metrics if m.success)} nodes passed."
+    )
 
     for m in metrics:
         history.update(m.node_id, m.success)
@@ -102,7 +116,9 @@ async def run_scanner():
     if final_nodes:
         # Generate and save subscription file
         subscription_content = "\n".join(node.config for node in final_nodes)
-        encoded_content = base64.b64encode(subscription_content.encode("utf-8")).decode("utf-8")
+        encoded_content = base64.b64encode(subscription_content.encode("utf-8")).decode(
+            "utf-8"
+        )
         safe_write(config.OUTPUT_SUBSCRIPTION_PATH, encoded_content)
         logger.info(f"Saved {len(final_nodes)} nodes to subscription file.")
 
@@ -117,6 +133,7 @@ async def run_scanner():
     logger.info("✅ Scanner run finished.")
     health_app.main_loop_active = False
 
+
 async def main_loop():
     """Runs the scanner in a loop with a configured interval."""
     while True:
@@ -126,11 +143,15 @@ async def main_loop():
         logger.info(f"Waiting for {config.RUN_INTERVAL_MINUTES} minutes...")
         await asyncio.sleep(config.RUN_INTERVAL_MINUTES * 60)
 
+
 async def start_health_server():
     """Starts the Uvicorn health check server."""
-    uv_config = uvicorn.Config(health_app, host="0.0.0.0", port=config.HEALTH_CHECK_PORT, log_level="warning")
+    uv_config = uvicorn.Config(
+        health_app, host="0.0.0.0", port=config.HEALTH_CHECK_PORT, log_level="warning"
+    )
     server = uvicorn.Server(uv_config)
     await server.serve()
+
 
 def main():
     """Synchronous entrypoint to start the application."""
@@ -143,7 +164,7 @@ def main():
         else:
             health_task = asyncio.create_task(start_health_server())
             main_task = asyncio.create_task(main_loop())
-            
+
             loop = asyncio.get_event_loop()
             loop.run_until_complete(asyncio.gather(health_task, main_task))
 
@@ -155,6 +176,7 @@ def main():
     except Exception:
         logger.critical("An unexpected critical error occurred.", exc_info=True)
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

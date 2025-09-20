@@ -14,13 +14,14 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
+
 def parse_vmess_uri(uri: str) -> Optional[Dict[str, Any]]:
     """Parses a vmess:// URI and returns an Xray outbound configuration dictionary."""
     try:
         if not uri.startswith("vmess://"):
             return None
 
-        decoded_part = base64.b64decode(uri[8:]).decode('utf-8')
+        decoded_part = base64.b64decode(uri[8:]).decode("utf-8")
         vmess_data = json.loads(decoded_part)
 
         # Basic fields
@@ -45,22 +46,34 @@ def parse_vmess_uri(uri: str) -> Optional[Dict[str, Any]]:
                 "network": vmess_data.get("net", "tcp"),
                 "security": vmess_data.get("tls", ""),
             },
-            "mux": {"enabled": True, "concurrency": 8}
+            "mux": {"enabled": True, "concurrency": 8},
         }
 
         # Stream settings
         net = vmess_data.get("net", "tcp")
         stream_settings = outbound["streamSettings"]
         if net == "tcp":
-            stream_settings["tcpSettings"] = {"header": {"type": vmess_data.get("type", "none")}}
+            stream_settings["tcpSettings"] = {
+                "header": {"type": vmess_data.get("type", "none")}
+            }
         elif net == "kcp":
-            stream_settings["kcpSettings"] = {"header": {"type": vmess_data.get("type", "none")}}
+            stream_settings["kcpSettings"] = {
+                "header": {"type": vmess_data.get("type", "none")}
+            }
         elif net == "ws":
-            stream_settings["wsSettings"] = {"path": vmess_data.get("path", "/"), "headers": {"Host": vmess_data.get("host", "")}}
+            stream_settings["wsSettings"] = {
+                "path": vmess_data.get("path", "/"),
+                "headers": {"Host": vmess_data.get("host", "")},
+            }
         elif net == "h2":
-            stream_settings["httpSettings"] = {"path": vmess_data.get("path", "/"), "host": vmess_data.get("host", "")}
+            stream_settings["httpSettings"] = {
+                "path": vmess_data.get("path", "/"),
+                "host": vmess_data.get("host", ""),
+            }
         elif net == "grpc":
-            stream_settings["grpcSettings"] = {"serviceName": vmess_data.get("path", "")}
+            stream_settings["grpcSettings"] = {
+                "serviceName": vmess_data.get("path", "")
+            }
 
         # TLS settings
         if vmess_data.get("tls") == "tls":
@@ -68,12 +81,13 @@ def parse_vmess_uri(uri: str) -> Optional[Dict[str, Any]]:
                 "serverName": vmess_data.get("sni", vmess_data.get("host", "")),
                 "allowInsecure": True,
             }
-        
+
         return outbound
 
     except (json.JSONDecodeError, base64.binascii.Error, KeyError, TypeError) as e:
         logger.warning(f"Could not parse vmess URI: {e}")
         return None
+
 
 def parse_v2ray_uri(uri: str) -> Optional[Dict[str, Any]]:
     """Generic parser that delegates to protocol-specific parsers."""

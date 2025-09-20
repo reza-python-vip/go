@@ -3,6 +3,7 @@
 This file contains the FastAPI `app` expected to be imported from the
 `src.health` package (i.e. `from src.health import app`).
 """
+
 from __future__ import annotations
 
 import datetime
@@ -58,7 +59,10 @@ def readiness_probe(response: Response) -> dict:
     report_path = Path(config.OUTPUT_REPORT_PATH)
     if not report_path.is_file():
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-        return {"status": "not_ready", "reason": f"Output report missing at {report_path}"}
+        return {
+            "status": "not_ready",
+            "reason": f"Output report missing at {report_path}",
+        }
 
     try:
         report_mtime = report_path.stat().st_mtime
@@ -67,7 +71,10 @@ def readiness_probe(response: Response) -> dict:
 
         if (now - report_mtime) > max_age_seconds:
             response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-            return {"status": "not_ready", "reason": "Report file has not been updated recently."}
+            return {
+                "status": "not_ready",
+                "reason": "Report file has not been updated recently.",
+            }
 
     except OSError as e:
         logger.error(f"Could not stat report file {report_path}: {e}")
