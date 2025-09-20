@@ -22,8 +22,10 @@ from .parsers import parse_v2ray_uri
 
 logger = logging.getLogger(__name__)
 
+
 class PortManager:
     """A simple manager to avoid port conflicts during concurrent tests."""
+
     def __init__(self, start_port: int, end_port: int):
         self._ports = asyncio.Queue()
         for port in range(start_port, end_port + 1):
@@ -36,6 +38,7 @@ class PortManager:
     async def release_port(self, port: int):
         """Release a port back to the pool."""
         await self._ports.put(port)
+
 
 class XrayManager:
     """Manages the lifecycle of an Xray subprocess for a single test."""
@@ -51,7 +54,9 @@ class XrayManager:
     async def __aenter__(self) -> XrayManager:
         self.config_path = await self._create_config_file()
         if not self.config_path:
-            raise XrayConfigError(f"Failed to parse or create config for node {self.node.node_id}")
+            raise XrayConfigError(
+                f"Failed to parse or create config for node {self.node.node_id}"
+            )
 
         if not os.path.exists(self.binary_path):
             raise XrayStartupError(f"Xray binary not found at {self.binary_path}")
@@ -67,11 +72,13 @@ class XrayManager:
         try:
             # Wait for Xray to start by checking if the SOCKS port is open
             await self._wait_for_port(self.port, timeout=5.0)
-            logger.debug(f"Xray process started for node {self.node.node_id} on port {self.port}")
+            logger.debug(
+                f"Xray process started for node {self.node.node_id} on port {self.port}"
+            )
             return self
         except asyncio.TimeoutError:
             stderr = await self.process.stderr.read()
-            error_msg = stderr.decode(errors='ignore')
+            error_msg = stderr.decode(errors="ignore")
             logger.warning(f"Xray for {self.node.node_id} failed to start: {error_msg}")
             await self.__aexit__(None, None, None)  # Ensure cleanup
             raise XrayStartupError(f"Xray process failed to start: {error_msg}")
@@ -97,18 +104,20 @@ class XrayManager:
 
         xray_config = {
             "log": {"loglevel": "warning"},
-            "inbounds": [{
-                "port": self.port,
-                "protocol": "socks",
-                "listen": "127.0.0.1",
-                "settings": {"auth": "noauth", "udp": True, "ip": "127.0.0.1"},
-            }],
+            "inbounds": [
+                {
+                    "port": self.port,
+                    "protocol": "socks",
+                    "listen": "127.0.0.1",
+                    "settings": {"auth": "noauth", "udp": True, "ip": "127.0.0.1"},
+                }
+            ],
             "outbounds": [outbound_config],
         }
 
         fd, path = tempfile.mkstemp(suffix=".json", dir=self.temp_dir)
         os.close(fd)
-        async with asyncio.to_thread(lambda: open(path, 'w')) as f:
+        async with asyncio.to_thread(lambda: open(path, "w")) as f:
             await asyncio.to_thread(json.dump, xray_config, f)
         return path
 
@@ -127,6 +136,7 @@ class XrayManager:
                 await asyncio.sleep(0.1)
         raise asyncio.TimeoutError(f"Port {port} did not open in time.")
 
+
 class XrayTester:
     """A NodeTester that uses the Xray-core binary to test proxy nodes."""
 
@@ -134,26 +144,40 @@ class XrayTester:
         self.config = config
         self.port_manager = port_manager
         if not os.path.isfile(self.config.XRAY_BINARY):
-            raise FileNotFoundError(f"Xray binary not found at {self.config.XRAY_BINARY}")
+            raise FileNotFoundError(
+                f"Xray binary not found at {self.config.XRAY_BINARY}"
+            )
 
     async def test_node(self, node: Node) -> NodeMetrics:
         port = await self.port_manager.get_port()
         try:
-            async with XrayManager(self.config.XRAY_BINARY, node, port, self.config.TEMP_DIR):
+            async with XrayManager(
+                self.config.XRAY_BINARY, node, port, self.config.TEMP_DIR
+            ):
                 metrics = await self._perform_tests(port)
                 return NodeMetrics(node_id=node.node_id, **metrics)
         except XrayConfigError as e:
             logger.warning(f"Configuration error for node {node.node_id}: {e}")
-            return NodeMetrics(node_id=node.node_id, success=False, error="config_error")
+            return NodeMetrics(
+                node_id=node.node_id, success=False, error="config_error"
+            )
         except XrayStartupError as e:
             logger.warning(f"Startup error for node {node.node_id}: {e}")
-            return NodeMetrics(node_id=node.node_id, success=False, error="startup_error")
+            return NodeMetrics(
+                node_id=node.node_id, success=False, error="startup_error"
+            )
         except ConnectionTestError as e:
             logger.warning(f"Connection test failed for node {node.node_id}: {e}")
-            return NodeMetrics(node_id=node.node_id, success=False, error="connection_error")
+            return NodeMetrics(
+                node_id=node.node_id, success=False, error="connection_error"
+            )
         except Exception as e:
-            logger.error(f"Unexpected error testing node {node.node_id}: {e}", exc_info=True)
-            return NodeMetrics(node_id=node.node_id, success=False, error="unknown_error")
+            logger.error(
+                f"Unexpected error testing node {node.node_id}: {e}", exc_info=True
+            )
+            return NodeMetrics(
+                node_id=node.node_id, success=False, error="unknown_error"
+            )
         finally:
             await self.port_manager.release_port(port)
 
@@ -164,7 +188,11 @@ class XrayTester:
         try:
             latency = await self._measure_latency(proxy_url, timeout)
             throughput = await self._measure_throughput(proxy_url, timeout)
-            return {"success": True, "latency_ms": latency, "throughput_kbps": throughput}
+            return {
+                "success": True,
+                "latency_ms": latency,
+                "throughput_kbps": throughput,
+            }
         except aiohttp.ClientConnectorError as e:
             logger.debug(f"Connection error on port {port}: {e}")
             raise ConnectionTestError(f"Failed to connect: {e}")
@@ -175,10 +203,15 @@ class XrayTester:
             logger.debug(f"Connection timeout on port {port}")
             raise ConnectionTestError("Connection timeout")
         except Exception as e:
-            logger.error(f"Unexpected error in connection test on port {port}: {e}", exc_info=True)
+            logger.error(
+                f"Unexpected error in connection test on port {port}: {e}",
+                exc_info=True,
+            )
             raise ConnectionTestError(f"Unknown error: {e}")
 
-    async def _measure_latency(self, proxy_url: str, timeout: aiohttp.ClientTimeout) -> float:
+    async def _measure_latency(
+        self, proxy_url: str, timeout: aiohttp.ClientTimeout
+    ) -> float:
         url = self.config.LATENCY_TEST_URL
         if not url:
             raise XrayConfigError("LATENCY_TEST_URL not configured")
@@ -198,7 +231,9 @@ class XrayTester:
             logger.error(f"Unexpected error in latency test: {e}", exc_info=True)
             raise ConnectionTestError(f"Latency test error: {e}")
 
-    async def _measure_throughput(self, proxy_url: str, timeout: aiohttp.ClientTimeout) -> float:
+    async def _measure_throughput(
+        self, proxy_url: str, timeout: aiohttp.ClientTimeout
+    ) -> float:
         url = self.config.SPEED_TEST_URL
         start_time = time.monotonic()
         bytes_downloaded = 0
@@ -213,4 +248,4 @@ class XrayTester:
         duration = time.monotonic() - start_time
         if duration == 0:
             return 0.0
-        return (bytes_downloaded * 8) / duration / 1024 # Kbps
+        return (bytes_downloaded * 8) / duration / 1024  # Kbps

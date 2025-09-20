@@ -10,6 +10,7 @@ from .utils import decode_base64_text
 
 logger = logging.getLogger(__name__)
 
+
 class SubscriptionFetcher:
     """Manages fetching and decoding of subscription sources."""
 
@@ -24,7 +25,9 @@ class SubscriptionFetcher:
         """Fetches content from a single URL."""
         logger.debug(f"Fetching from source: {url}")
         try:
-            async with session.get(url, timeout=self.timeout, headers=self.headers) as response:
+            async with session.get(
+                url, timeout=self.timeout, headers=self.headers
+            ) as response:
                 response.raise_for_status()
                 return await response.text()
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
@@ -42,19 +45,23 @@ class SubscriptionFetcher:
         for i, result in enumerate(results):
             source_url = self.sources[i]
             if isinstance(result, Exception):
-                logger.error(f"Could not process subscription from {source_url}: {result}")
+                logger.error(
+                    f"Could not process subscription from {source_url}: {result}"
+                )
                 continue
 
             logger.info(f"Successfully fetched content from {source_url}.")
             content = result
             decoded_text = decode_base64_text(content)
             raw_text = decoded_text if decoded_text else content
-            
+
             lines = {line.strip() for line in raw_text.splitlines() if line.strip()}
             if lines:
                 new_configs = lines - all_configs
                 all_configs.update(new_configs)
-                logger.info(f"Added {len(new_configs)} new unique configs from {source_url}.")
+                logger.info(
+                    f"Added {len(new_configs)} new unique configs from {source_url}."
+                )
 
         if not all_configs:
             logger.warning("No configurations were fetched from any source.")
@@ -65,7 +72,9 @@ class SubscriptionFetcher:
         return final_configs
 
 
-async def fetch_subscription_links(sources: list[str] | None = None, timeout: float = 10.0) -> list[str]:
+async def fetch_subscription_links(
+    sources: list[str] | None = None, timeout: float = 10.0
+) -> list[str]:
     """Convenience wrapper used by other modules to fetch subscription links.
 
     Args:

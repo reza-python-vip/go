@@ -31,9 +31,12 @@ class HiddifyTester:
         cmd = [
             str(self.config.HIDDIFY_BINARY),
             "run",
-            "--config", "memory:{\"log\":{\"level\":\"warn\"}}",
-            "--experimental", "rpc-server",
-            "--experimental-rpc-server-addr", f"127.0.0.1:{self.rpc_port}",
+            "--config",
+            'memory:{"log":{"level":"warn"}}',
+            "--experimental",
+            "rpc-server",
+            "--experimental-rpc-server-addr",
+            f"127.0.0.1:{self.rpc_port}",
         ]
         logger.info("Starting Hiddify-Core process on RPC port %s", self.rpc_port)
         self.process = await asyncio.create_subprocess_exec(
@@ -41,7 +44,7 @@ class HiddifyTester:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        await asyncio.sleep(1) # Give it a moment to start up
+        await asyncio.sleep(1)  # Give it a moment to start up
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -53,7 +56,9 @@ class HiddifyTester:
             await self.session.close()
         logger.info("HiddifyTester shut down.")
 
-    async def _rpc_call(self, method: str, params: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    async def _rpc_call(
+        self, method: str, params: Dict[str, Any] | None = None
+    ) -> Dict[str, Any]:
         """Executes a JSON-RPC call to the Hiddify-Core process."""
         payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}}
         url = f"http://127.0.0.1:{self.rpc_port}/jsonrpc"
@@ -77,34 +82,54 @@ class HiddifyTester:
 
         try:
             # 1. Select the proxy
-            await self._rpc_call("proxy.select", {"tag": "outbound", "proxy": node.config})
+            await self._rpc_call(
+                "proxy.select", {"tag": "outbound", "proxy": node.config}
+            )
 
             # 2. Test latency
             latency_result = await self._rpc_call(
-                "proxy.urltest", {"tag": "outbound", "url": self.config.LATENCY_TEST_URL}
+                "proxy.urltest",
+                {"tag": "outbound", "url": self.config.LATENCY_TEST_URL},
             )
             latency_ms = latency_result.get("delay", -1)
 
             if latency_ms > 0 and latency_ms < self.config.MAX_LATENCY_MS:
                 # 3. Test throughput if latency is acceptable
                 speed_result = await self._rpc_call(
-                    "proxy.urltest", {"tag": "outbound", "url": self.config.SPEED_TEST_URL}
+                    "proxy.urltest",
+                    {"tag": "outbound", "url": self.config.SPEED_TEST_URL},
                 )
                 download_kbps = speed_result.get("download_speed", 0) / 1024
-                
+
                 if download_kbps > self.config.MIN_THROUGHPUT_KBPS:
                     throughput_kbps = download_kbps
                     success = True
-                    logger.debug("Node %s passed: Latency %sms, Speed %.2f KB/s", node.remark, latency_ms, throughput_kbps)
+                    logger.debug(
+                        "Node %s passed: Latency %sms, Speed %.2f KB/s",
+                        node.remark,
+                        latency_ms,
+                        throughput_kbps,
+                    )
                 else:
-                    logger.debug("Node %s failed speed test: %.2f KB/s", node.remark, download_kbps)
+                    logger.debug(
+                        "Node %s failed speed test: %.2f KB/s",
+                        node.remark,
+                        download_kbps,
+                    )
             else:
-                logger.debug("Node %s failed latency test: %sms", node.remark, latency_ms)
+                logger.debug(
+                    "Node %s failed latency test: %sms", node.remark, latency_ms
+                )
 
         except (RuntimeError, aiohttp.ClientError) as e:
             logger.warning("Test failed for node %s: %s", node.remark, e)
         except Exception as e:
-            logger.error("An unexpected error occurred testing %s: %s", node.remark, e, exc_info=True)
+            logger.error(
+                "An unexpected error occurred testing %s: %s",
+                node.remark,
+                e,
+                exc_info=True,
+            )
         finally:
             self.port_manager.release_port(socks_port)
 

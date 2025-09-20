@@ -78,10 +78,7 @@ async def main():
     """Main application entry point."""
     # Setup logging
     log_file = os.path.join("logs", "scanner.log") if os.path.isdir("logs") else None
-    setup_logging(
-        log_level=os.getenv("LOG_LEVEL", "INFO"),
-        log_file=log_file
-    )
+    setup_logging(log_level=os.getenv("LOG_LEVEL", "INFO"), log_file=log_file)
 
     config = Config()
     history = HistoryManager(Path(config.OUTPUT_DIR))
@@ -104,8 +101,12 @@ async def main():
     health_server_thread = threading.Thread(
         target=uvicorn.run,
         args=(health_app,),
-        kwargs={"host": "0.0.0.0", "port": config.HEALTH_CHECK_PORT, "log_level": "warning"},
-        daemon=True
+        kwargs={
+            "host": "0.0.0.0",
+            "port": config.HEALTH_CHECK_PORT,
+            "log_level": "warning",
+        },
+        daemon=True,
     )
     health_server_thread.start()
 
@@ -114,14 +115,18 @@ async def main():
         try:
             await run_once(config, history, tester)
         except Exception as e:
-            logger.critical(f"An unhandled error occurred in the main loop: {e}", exc_info=True)
-        
+            logger.critical(
+                f"An unhandled error occurred in the main loop: {e}", exc_info=True
+            )
+
         # Wait for the next interval or for the shutdown signal
         try:
-            await asyncio.wait_for(shutdown_event.wait(), timeout=config.RUN_INTERVAL_MINUTES * 60)
+            await asyncio.wait_for(
+                shutdown_event.wait(), timeout=config.RUN_INTERVAL_MINUTES * 60
+            )
         except asyncio.TimeoutError:
-            pass # This is expected, continue to next cycle
-    
+            pass  # This is expected, continue to next cycle
+
     logger.info("Shutting down... Final history save.")
     await history.save_history()
     logger.info("Application has shut down gracefully.")
