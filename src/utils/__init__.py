@@ -8,10 +8,11 @@ Also provides PortManager and get_open_port for port allocation.
 """
 
 from __future__ import annotations
+
 import asyncio
-import base64
 import logging
 import socket
+from base64 import b64decode, binascii
 from pathlib import Path
 from typing import Optional
 
@@ -43,7 +44,7 @@ def decode_base64_text(encoded_text: str) -> Optional[str]:
     except UnicodeDecodeError as e:
         logger.warning("Could not decode bytes to UTF-8 after base64 decoding: %s", e)
         return None
-    except (ValueError, TypeError, base64.binascii.Error):
+    except (ValueError, TypeError, binascii.Error):
         # Not a valid base64 string, might be a regular config line
         return None
 

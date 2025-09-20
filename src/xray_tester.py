@@ -6,6 +6,7 @@ import logging
 import os
 import tempfile
 import time
+from pathlib import Path
 from typing import Optional
 
 from .exceptions import (
@@ -27,7 +28,7 @@ class PortManager:
     """A simple manager to avoid port conflicts during concurrent tests."""
 
     def __init__(self, start_port: int, end_port: int):
-        self._ports = asyncio.Queue()
+        self._ports: asyncio.Queue[int] = asyncio.Queue()
         for port in range(start_port, end_port + 1):
             self._ports.put_nowait(port)
 
@@ -66,7 +67,7 @@ class XrayManager:
             self.process = await asyncio.create_subprocess_exec(
                 *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
             )
-        except (OSError, asyncio.SubprocessError) as e:
+        except OSError as e:
             raise XrayStartupError(f"Failed to start Xray process: {e}")
 
         try:
@@ -77,8 +78,11 @@ class XrayManager:
             )
             return self
         except asyncio.TimeoutError:
-            stderr = await self.process.stderr.read()
-            error_msg = stderr.decode(errors="ignore")
+            if self.process and self.process.stderr:
+                stderr = await self.process.stderr.read()
+                error_msg = stderr.decode(errors="ignore")
+            else:
+                error_msg = "Unknown error"
             logger.warning(f"Xray for {self.node.node_id} failed to start: {error_msg}")
             await self.__aexit__(None, None, None)  # Ensure cleanup
             raise XrayStartupError(f"Xray process failed to start: {error_msg}")
@@ -117,8 +121,8 @@ class XrayManager:
 
         fd, path = tempfile.mkstemp(suffix=".json", dir=self.temp_dir)
         os.close(fd)
-        async with asyncio.to_thread(lambda: open(path, "w")) as f:
-            await asyncio.to_thread(json.dump, xray_config, f)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lambda: Path(path).write_text(json.dumps(xray_config)))
         return path
 
     @staticmethod
@@ -152,7 +156,7 @@ class XrayTester:
         port = await self.port_manager.get_port()
         try:
             async with XrayManager(
-                self.config.XRAY_BINARY, node, port, self.config.TEMP_DIR
+                str(self.config.XRAY_BINARY), node, port, str(self.config.TEMP_DIR)
             ):
                 metrics = await self._perform_tests(port)
                 return NodeMetrics(node_id=node.node_id, **metrics)

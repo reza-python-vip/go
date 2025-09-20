@@ -10,7 +10,9 @@ from __future__ import annotations
 import base64
 import json
 import logging
-from typing import Any, Dict, Optional
+import binascii
+from base64 import b64decode
+from typing import Any, Dict, Optional, cast
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +53,7 @@ def parse_vmess_uri(uri: str) -> Optional[Dict[str, Any]]:
 
         # Stream settings
         net = vmess_data.get("net", "tcp")
-        stream_settings = outbound["streamSettings"]
+        stream_settings = cast(Dict[str, Any], outbound["streamSettings"])
         if net == "tcp":
             stream_settings["tcpSettings"] = {
                 "header": {"type": vmess_data.get("type", "none")}
@@ -84,7 +86,7 @@ def parse_vmess_uri(uri: str) -> Optional[Dict[str, Any]]:
 
         return outbound
 
-    except (json.JSONDecodeError, base64.binascii.Error, KeyError, TypeError) as e:
+    except (json.JSONDecodeError, binascii.Error, KeyError, TypeError) as e:
         logger.warning(f"Could not parse vmess URI: {e}")
         return None
 

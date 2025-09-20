@@ -7,9 +7,13 @@ for any class that aims to test the network performance of a proxy configuration
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
-from .network_metrics import Metrics
+if TYPE_CHECKING:
+    from .xray_tester import PortManager
+
+from .config import Config
+from .models import Node, NodeMetrics
 
 
 class NodeTester(ABC):
@@ -20,14 +24,18 @@ class NodeTester(ABC):
     """
 
     @abstractmethod
-    async def test_node(self, config_line: str) -> Optional[Metrics]:
+    def __init__(self, config: Config, port_manager: "PortManager") -> None:
+        pass
+
+    @abstractmethod
+    async def test_node(self, node: Node) -> Optional[NodeMetrics]:
         """Tests a single proxy configuration and returns its network metrics.
 
         Args:
-            config_line: The configuration string (e.g., vmess://, ss://) to be tested.
+            node: The `Node` object to be tested.
 
         Returns:
-            A `Metrics` object containing the performance data if the test is successful,
+            A `NodeMetrics` object containing the performance data if the test is successful,
             or `None` if the test fails, is inconclusive, or the node is invalid.
         """
         pass

@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 from typing import Optional, Union
-from urllib.parse import urlparse
+from urllib.parse import urlparse, ParseResult
 
 
 @dataclass(frozen=True)
@@ -16,18 +16,19 @@ class Node:
     def __post_init__(self) -> None:
         """Generate a stable ID from the core components of the config URI."""
         base_config: str = self.config.split("#")[0].strip()
-        parsed: urlparse.ParseResult = urlparse(base_config)
+        parsed: ParseResult = urlparse(base_config)
 
+        identifier: str
         # Use hostname and port for a stable ID
         if parsed.hostname and parsed.port:
             # Include path if it's significant for certain protocols
             if parsed.scheme in {"ws", "grpc"} and parsed.path and parsed.path != "/":
-                identifier: str = f"{parsed.hostname}:{parsed.port}:{parsed.path}"
+                identifier = f"{parsed.hostname}:{parsed.port}:{parsed.path}"
             else:
-                identifier: str = f"{parsed.hostname}:{parsed.port}"
+                identifier = f"{parsed.hostname}:{parsed.port}"
         else:
             # Fallback for non-standard URIs
-            identifier: str = base_config
+            identifier = base_config
 
         # Use a non-crypto hash for speed, as it's for identification not security
         hasher: hashlib._Hash = hashlib.sha256()

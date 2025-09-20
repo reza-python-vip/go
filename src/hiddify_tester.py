@@ -9,7 +9,8 @@ import aiohttp
 
 from .config import Config
 from .models import Node, NodeMetrics
-from .utils import PortManager, get_open_port
+from .utils import get_open_port
+from .xray_tester import PortManager
 
 logger = logging.getLogger(__name__)
 
@@ -73,9 +74,16 @@ class HiddifyTester:
             logger.error(f"RPC call '{method}' failed: {e}")
             raise
 
+    def _get_remark(self, node: Node) -> str:
+        """Extracts the remark from the node config."""
+        try:
+            return node.config.split("#")[1]
+        except IndexError:
+            return ""
+
     async def test_node(self, node: Node) -> NodeMetrics:
         """Tests a single node and returns its metrics."""
-        socks_port = self.port_manager.get_port()
+        socks_port = await self.port_manager.get_port()
         latency_ms = -1
         throughput_kbps = -1
         success = False
@@ -105,33 +113,32 @@ class HiddifyTester:
                     throughput_kbps = download_kbps
                     success = True
                     logger.debug(
-                        "Node %s passed: Latency %sms, Speed %.2f KB/s",
-                        node.remark,
+                        self._get_remark(node),
                         latency_ms,
                         throughput_kbps,
                     )
                 else:
                     logger.debug(
                         "Node %s failed speed test: %.2f KB/s",
-                        node.remark,
+                        self._get_remark(node),
                         download_kbps,
                     )
             else:
                 logger.debug(
-                    "Node %s failed latency test: %sms", node.remark, latency_ms
+                    "Node %s failed latency test: %sms", self._get_remark(node), latency_ms
                 )
 
         except (RuntimeError, aiohttp.ClientError) as e:
-            logger.warning("Test failed for node %s: %s", node.remark, e)
+            logger.warning("Test failed for node %s: %s", self._get_remark(node), e)
         except Exception as e:
             logger.error(
                 "An unexpected error occurred testing %s: %s",
-                node.remark,
+                self._get_remark(node),
                 e,
                 exc_info=True,
             )
         finally:
-            self.port_manager.release_port(socks_port)
+            await self.port_manager.release_port(socks_port)
 
         return NodeMetrics(
             node_id=node.node_id,

@@ -23,7 +23,7 @@ def setup_logging(
     numeric_level = getattr(logging, log_level.upper(), logging.INFO)
 
     # Create handlers
-    handlers = []
+    handlers: list[logging.Handler] = []
 
     # Always add stderr handler
     console_handler = logging.StreamHandler(sys.stderr)

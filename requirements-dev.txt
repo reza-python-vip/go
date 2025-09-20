@@ -4,3 +4,4 @@ pytest-aiohttp==1.0.5
 ruff
 bandit
 pip-audit
+mypy==1.10.0

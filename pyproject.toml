@@ -1,2 +1,5 @@
 [tool.ruff]
 exclude = ["get-pip.py"]
+
+[tool.mypy]
+ignore_missing_imports = true

@@ -50,6 +50,7 @@ class SubscriptionFetcher:
                 )
                 continue
 
+            assert isinstance(result, str)
             logger.info(f"Successfully fetched content from {source_url}.")
             content = result
             decoded_text = decode_base64_text(content)

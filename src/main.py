@@ -4,18 +4,20 @@ import asyncio
 import base64
 import logging
 import sys
-from typing import List, Type
+from typing import List, Type, TypeVar, cast, TYPE_CHECKING
 
 import uvicorn
 
-try:
-    from tqdm.asyncio import tqdm  # optional dependency
-except ImportError:  # pragma: no cover - fallback when tqdm isn't installed
+if TYPE_CHECKING:
+    from tqdm.asyncio import tqdm
+else:
+    try:
+        from tqdm.asyncio import tqdm
+    except ImportError:  # pragma: no cover
 
-    def tqdm(iterable, **kwargs):
-        """Fallback tqdm: returns the iterable unchanged when tqdm is not available."""
-        return iterable
-
+        def tqdm(iterable, **kwargs):
+            """Fallback tqdm: returns the iterable unchanged when tqdm is not available."""
+            return iterable
 
 from .config import config
 from .fetcher import fetch_subscription_links
@@ -26,7 +28,8 @@ from .models import Node, NodeMetrics
 from .tester_base import NodeTester
 from .parsers import parse_links
 from .reporter import generate_report
-from .utils import PortManager, safe_write
+from .utils import safe_write
+from .xray_tester import PortManager, XrayTester
 from .xray_tester import XrayTester
 from .hiddify_tester import HiddifyTester
 
@@ -39,18 +42,21 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def get_tester_class() -> Type[NodeTester]:
+T = TypeVar("T", bound=NodeTester)
+
+
+def get_tester_class() -> Type[T]:
     """Factory to get the tester class based on config."""
     tester_name = config.TESTER.lower()
     if tester_name == "xray":
-        return XrayTester
+        return cast(Type[T], XrayTester)
     if tester_name == "hiddify":
-        return HiddifyTester
+        return cast(Type[T], HiddifyTester)
     raise ValueError(f"Invalid tester specified: '{config.TESTER}'")
 
 
 async def test_all_nodes(
-    tester_class: Type[NodeTester],
+    tester_class: Type[T],
     nodes: List[Node],
     port_manager: PortManager,
 ) -> List[NodeMetrics]:
